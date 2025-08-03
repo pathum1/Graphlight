@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\src\TaskbarEqualizer.Core\TaskbarEqualizer.Core.csproj" />
+    <ProjectReference Include="..\src\TaskbarEqualizer.SystemTray\TaskbarEqualizer.SystemTray.csproj" />
+    <ProjectReference Include="..\src\TaskbarEqualizer.Configuration\TaskbarEqualizer.Configuration.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="8.0.0" />
+  </ItemGroup>
+
+</Project>

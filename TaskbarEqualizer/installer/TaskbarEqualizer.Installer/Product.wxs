@@ -1,0 +1,177 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi"
+     xmlns:util="http://schemas.microsoft.com/wix/UtilExtension">
+
+  <!-- Product Definition -->
+  <Product Id="*" 
+           Name="TaskbarEqualizer" 
+           Language="1033" 
+           Version="1.0.0.0" 
+           Manufacturer="Graphlight" 
+           UpgradeCode="{12345678-1234-1234-1234-123456789012}">
+
+    <!-- Package Configuration -->
+    <Package InstallerVersion="500" 
+             Compressed="yes" 
+             InstallScope="perMachine"
+             Description="TaskbarEqualizer - Professional Audio Visualizer"
+             Comments="Real-time audio visualization for Windows taskbar"
+             Manufacturer="Graphlight" />
+
+    <!-- Media and Cabinet Configuration -->
+    <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <!-- Prerequisites and Conditions -->
+    <PropertyRef Id="WIX_IS_NETFRAMEWORK_48_OR_LATER_INSTALLED"/>
+    <Condition Message="This application requires .NET 8.0 or later.">
+      <![CDATA[Installed OR WIX_IS_NETFRAMEWORK_48_OR_LATER_INSTALLED]]>
+    </Condition>
+
+    <!-- System Requirements -->
+    <Condition Message="This application requires Windows 10 version 1903 or later.">
+      <![CDATA[Installed OR (VersionNT >= 603)]]>
+    </Condition>
+
+    <!-- Installation Directory Structure -->
+    <Feature Id="ProductFeature" Title="TaskbarEqualizer" Level="1">
+      <ComponentGroupRef Id="ProductComponents" />
+      <ComponentGroupRef Id="ApplicationFiles" />
+      <ComponentRef Id="ApplicationShortcut" />
+      <ComponentRef Id="EnvironmentVariables" />
+    </Feature>
+
+    <!-- Custom Properties -->
+    <Property Id="ARPPRODUCTICON" Value="TaskbarEqualizer.exe" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/Graphlight/TaskbarEqualizer" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/Graphlight/TaskbarEqualizer" />
+    <Property Id="ARPCONTACT" Value="support@graphlight.com" />
+    <Property Id="ARPCOMMENTS" Value="Professional audio visualizer for Windows taskbar" />
+
+    <!-- Launch Application Option -->
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Launch TaskbarEqualizer" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
+
+    <!-- Custom Actions -->
+    <CustomAction Id="LaunchApplication"
+                  FileKey="TaskbarEqualizer.exe"
+                  ExeCommand=""
+                  Execute="immediate"
+                  Impersonate="yes"
+                  Return="asyncNoWait" />
+
+    <!-- Install Sequences -->
+    <InstallExecuteSequence>
+      <Custom Action="LaunchApplication" After="InstallFinalize">
+        <![CDATA[NOT Installed AND NOT REMOVE]]>
+      </Custom>
+    </InstallExecuteSequence>
+
+    <!-- UI Configuration -->
+    <UI Id="TaskbarEqualizerUI">
+      <UIRef Id="WixUI_InstallDir" />
+      <UIRef Id="WixUI_ErrorProgressText" />
+
+      <!-- Custom Dialogs -->
+      <DialogRef Id="ExitDialog" />
+      
+      <!-- Publish Events -->
+      <Publish Dialog="ExitDialog"
+               Control="Finish"
+               Event="DoAction"
+               Value="LaunchApplication">
+        WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 and NOT Installed
+      </Publish>
+    </UI>
+
+    <!-- License -->
+    <WixVariable Id="WixUILicenseRtf" Value="License.rtf" />
+
+    <!-- Icons -->
+    <Icon Id="TaskbarEqualizer.exe" SourceFile="$(var.TaskbarEqualizer.TargetPath)" />
+
+  </Product>
+
+  <!-- Directory Structure -->
+  <Fragment>
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <!-- Program Files -->
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="CompanyFolder" Name="Graphlight">
+          <Directory Id="INSTALLFOLDER" Name="TaskbarEqualizer" />
+        </Directory>
+      </Directory>
+
+      <!-- Start Menu -->
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="ApplicationProgramsFolder" Name="TaskbarEqualizer" />
+      </Directory>
+
+      <!-- Desktop -->
+      <Directory Id="DesktopFolder" Name="Desktop" />
+
+      <!-- Startup Folder -->
+      <Directory Id="StartupFolder" Name="Startup" />
+    </Directory>
+  </Fragment>
+
+  <!-- Application Shortcut Component -->
+  <Fragment>
+    <ComponentGroup Id="ProductComponents" Directory="INSTALLFOLDER">
+      
+      <!-- Main Application Shortcut -->
+      <Component Id="ApplicationShortcut" Guid="{A1B2C3D4-E5F6-7890-ABCD-123456789012}">
+        <Shortcut Id="ApplicationStartMenuShortcut"
+                  Name="TaskbarEqualizer"
+                  Description="Professional audio visualizer for Windows taskbar"
+                  Target="[#TaskbarEqualizer.exe]"
+                  WorkingDirectory="INSTALLFOLDER"
+                  Directory="ApplicationProgramsFolder" />
+        
+        <!-- Desktop Shortcut (Optional) -->
+        <Shortcut Id="ApplicationDesktopShortcut"
+                  Name="TaskbarEqualizer"
+                  Description="Professional audio visualizer for Windows taskbar"
+                  Target="[#TaskbarEqualizer.exe]"
+                  WorkingDirectory="INSTALLFOLDER"
+                  Directory="DesktopFolder" />
+
+        <!-- Uninstall Shortcut -->
+        <Shortcut Id="UninstallProduct"
+                  Name="Uninstall TaskbarEqualizer"
+                  Target="[SystemFolder]msiexec.exe"
+                  Arguments="/x [ProductCode]"
+                  Directory="ApplicationProgramsFolder" />
+
+        <!-- Registry Entries for Start Menu -->
+        <RemoveFolder Id="ApplicationProgramsFolder" On="uninstall" />
+        <RegistryValue Root="HKCU" 
+                       Key="Software\Graphlight\TaskbarEqualizer" 
+                       Name="installed" 
+                       Type="integer" 
+                       Value="1" 
+                       KeyPath="yes" />
+      </Component>
+
+      <!-- Environment Variables -->
+      <Component Id="EnvironmentVariables" Guid="{B2C3D4E5-F6A7-8901-BCDE-234567890123}">
+        <Environment Id="TaskbarEqualizerPath"
+                     Name="TASKBAR_EQUALIZER_HOME"
+                     Value="[INSTALLFOLDER]"
+                     Permanent="no"
+                     Part="all"
+                     Action="set"
+                     System="no" />
+        
+        <RegistryValue Root="HKCU" 
+                       Key="Software\Graphlight\TaskbarEqualizer\Environment" 
+                       Name="PathSet" 
+                       Type="integer" 
+                       Value="1" 
+                       KeyPath="yes" />
+      </Component>
+
+    </ComponentGroup>
+  </Fragment>
+
+</Wix>

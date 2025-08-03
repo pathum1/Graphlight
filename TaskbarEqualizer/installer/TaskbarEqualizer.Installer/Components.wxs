@@ -1,0 +1,164 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+
+  <!-- Application Files Component Group -->
+  <Fragment>
+    <ComponentGroup Id="ApplicationFiles" Directory="INSTALLFOLDER">
+      
+      <!-- Main Application Files -->
+      <Component Id="TaskbarEqualizerExe" Guid="{C3D4E5F6-A7B8-9012-CDEF-345678901234}">
+        <File Id="TaskbarEqualizer.exe" 
+              Source="$(var.TaskbarEqualizer.TargetPath)" 
+              KeyPath="yes" />
+      </Component>
+
+      <!-- Core Library -->
+      <Component Id="TaskbarEqualizerCore" Guid="{D4E5F6A7-B8C9-0123-DEF4-456789012345}">
+        <File Id="TaskbarEqualizer.Core.dll" 
+              Source="$(var.TaskbarEqualizer.TargetDir)TaskbarEqualizer.Core.dll" />
+      </Component>
+
+      <!-- System Tray Library -->
+      <Component Id="TaskbarEqualizerSystemTray" Guid="{E5F6A7B8-C9D0-1234-EF56-567890123456}">
+        <File Id="TaskbarEqualizer.SystemTray.dll" 
+              Source="$(var.TaskbarEqualizer.TargetDir)TaskbarEqualizer.SystemTray.dll" />
+      </Component>
+
+      <!-- Configuration Library -->
+      <Component Id="TaskbarEqualizerConfiguration" Guid="{F6A7B8C9-D0E1-2345-F678-678901234567}">
+        <File Id="TaskbarEqualizer.Configuration.dll" 
+              Source="$(var.TaskbarEqualizer.TargetDir)TaskbarEqualizer.Configuration.dll" />
+      </Component>
+
+      <!-- Third-Party Dependencies -->
+      <Component Id="FftSharpDependency" Guid="{A7B8C9D0-E1F2-3456-789A-789012345678}">
+        <File Id="FftSharp.dll" 
+              Source="$(var.TaskbarEqualizer.TargetDir)FftSharp.dll" />
+      </Component>
+
+      <Component Id="NewtonsoftJsonDependency" Guid="{B8C9D0E1-F2A3-4567-89AB-890123456789}">
+        <File Id="Newtonsoft.Json.dll" 
+              Source="$(var.TaskbarEqualizer.TargetDir)Newtonsoft.Json.dll" />
+      </Component>
+
+      <!-- Microsoft Extensions Dependencies -->
+      <Component Id="MicrosoftExtensionsDependencies" Guid="{C9D0E1F2-A3B4-5678-9ABC-901234567890}">
+        <File Id="Microsoft.Extensions.DependencyInjection.dll" 
+              Source="$(var.TaskbarEqualizer.TargetDir)Microsoft.Extensions.DependencyInjection.dll" />
+        <File Id="Microsoft.Extensions.Logging.dll" 
+              Source="$(var.TaskbarEqualizer.TargetDir)Microsoft.Extensions.Logging.dll" />
+        <File Id="Microsoft.Extensions.Hosting.dll" 
+              Source="$(var.TaskbarEqualizer.TargetDir)Microsoft.Extensions.Hosting.dll" />
+        <File Id="Microsoft.Extensions.Configuration.dll" 
+              Source="$(var.TaskbarEqualizer.TargetDir)Microsoft.Extensions.Configuration.dll" />
+      </Component>
+
+      <!-- System Dependencies -->
+      <Component Id="SystemDependencies" Guid="{D0E1F2A3-B4C5-6789-ABCD-012345678901}">
+        <File Id="System.Text.Json.dll" 
+              Source="$(var.TaskbarEqualizer.TargetDir)System.Text.Json.dll" />
+        <File Id="System.Drawing.Common.dll" 
+              Source="$(var.TaskbarEqualizer.TargetDir)System.Drawing.Common.dll" />
+      </Component>
+
+      <!-- Runtime Configuration -->
+      <Component Id="RuntimeConfiguration" Guid="{E1F2A3B4-C5D6-789A-BCDE-123456789012}">
+        <File Id="TaskbarEqualizer.runtimeconfig.json" 
+              Source="$(var.TaskbarEqualizer.TargetDir)TaskbarEqualizer.runtimeconfig.json" />
+        <File Id="TaskbarEqualizer.deps.json" 
+              Source="$(var.TaskbarEqualizer.TargetDir)TaskbarEqualizer.deps.json" />
+      </Component>
+
+      <!-- Application Configuration -->
+      <Component Id="ApplicationConfiguration" Guid="{F2A3B4C5-D6E7-89AB-CDEF-234567890123}">
+        <File Id="appsettings.json" 
+              Source="$(var.TaskbarEqualizer.TargetDir)appsettings.json" />
+      </Component>
+
+      <!-- Documentation -->
+      <Component Id="Documentation" Guid="{A3B4C5D6-E7F8-9ABC-DEF0-345678901234}">
+        <File Id="README.md" 
+              Source="$(var.SolutionDir)README.md" />
+        <File Id="LICENSE" 
+              Source="$(var.SolutionDir)LICENSE" />
+        <File Id="CHANGELOG.md" 
+              Source="$(var.SolutionDir)CHANGELOG.md" />
+      </Component>
+
+    </ComponentGroup>
+  </Fragment>
+
+  <!-- Auto-Start Registry Component -->
+  <Fragment>
+    <ComponentGroup Id="AutoStartComponents" Directory="INSTALLFOLDER">
+      
+      <Component Id="AutoStartRegistry" Guid="{B4C5D6E7-F8A9-BCDE-F012-456789012345}">
+        <!-- Optional auto-start registry entry (user configurable) -->
+        <RegistryKey Root="HKCU" Key="Software\Microsoft\Windows\CurrentVersion\Run">
+          <RegistryValue Name="TaskbarEqualizer" 
+                         Type="string" 
+                         Value="[#TaskbarEqualizer.exe] --minimized" />
+        </RegistryKey>
+        
+        <!-- Component key path -->
+        <RegistryValue Root="HKCU" 
+                       Key="Software\Graphlight\TaskbarEqualizer\AutoStart" 
+                       Name="Enabled" 
+                       Type="integer" 
+                       Value="0" 
+                       KeyPath="yes" />
+      </Component>
+
+    </ComponentGroup>
+  </Fragment>
+
+  <!-- File Associations -->
+  <Fragment>
+    <ComponentGroup Id="FileAssociations" Directory="INSTALLFOLDER">
+      
+      <Component Id="AudioFileAssociations" Guid="{C5D6E7F8-A9BC-DEF0-1234-567890123456}">
+        <!-- Register for audio file monitoring (optional) -->
+        <RegistryKey Root="HKLM" Key="SOFTWARE\Classes\.teq">
+          <RegistryValue Type="string" Value="TaskbarEqualizer.Settings" />
+        </RegistryKey>
+        
+        <RegistryKey Root="HKLM" Key="SOFTWARE\Classes\TaskbarEqualizer.Settings">
+          <RegistryValue Type="string" Value="TaskbarEqualizer Settings File" />
+          <RegistryKey Key="DefaultIcon">
+            <RegistryValue Type="string" Value="[#TaskbarEqualizer.exe],0" />
+          </RegistryKey>
+          <RegistryKey Key="shell\open\command">
+            <RegistryValue Type="string" Value="&quot;[#TaskbarEqualizer.exe]&quot; &quot;%1&quot;" />
+          </RegistryKey>
+        </RegistryKey>
+
+        <!-- Component key path -->
+        <RegistryValue Root="HKLM" 
+                       Key="SOFTWARE\Graphlight\TaskbarEqualizer\FileAssociations" 
+                       Name="Registered" 
+                       Type="integer" 
+                       Value="1" 
+                       KeyPath="yes" />
+      </Component>
+
+    </ComponentGroup>
+  </Fragment>
+
+  <!-- Windows Service Component (if needed for future) -->
+  <Fragment>
+    <ComponentGroup Id="ServiceComponents" Directory="INSTALLFOLDER">
+      
+      <Component Id="TaskbarEqualizerService" Guid="{D6E7F8A9-BCDE-F012-3456-678901234567}">
+        <!-- Future: Windows Service registration for background processing -->
+        <RegistryValue Root="HKLM" 
+                       Key="SOFTWARE\Graphlight\TaskbarEqualizer\Service" 
+                       Name="Installed" 
+                       Type="integer" 
+                       Value="0" 
+                       KeyPath="yes" />
+      </Component>
+
+    </ComponentGroup>
+  </Fragment>
+
+</Wix>

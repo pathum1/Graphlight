@@ -1,0 +1,364 @@
+name: Build TaskbarEqualizer Installer
+
+on:
+  push:
+    branches: [ main, develop ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  DOTNET_VERSION: '8.0.x'
+  PROJECT_NAME: 'TaskbarEqualizer'
+  BUILD_CONFIGURATION: 'Release'
+
+jobs:
+  build-installer:
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+        
+    - name: Cache NuGet packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.nuget/packages
+        key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+        restore-keys: |
+          ${{ runner.os }}-nuget-
+
+    - name: Restore dependencies
+      run: dotnet restore
+
+    - name: Build solution
+      run: dotnet build --configuration ${{ env.BUILD_CONFIGURATION }} --no-restore
+
+    - name: Run tests
+      run: dotnet test --configuration ${{ env.BUILD_CONFIGURATION }} --no-build --verbosity normal
+
+    - name: Publish self-contained executable
+      run: |
+        dotnet publish TaskbarEqualizer.Main\TaskbarEqualizer.Main.csproj `
+          --configuration ${{ env.BUILD_CONFIGURATION }} `
+          --runtime win-x64 `
+          --self-contained true `
+          --output publish\TaskbarEqualizer `
+          -p:PublishSingleFile=true `
+          -p:IncludeNativeLibrariesForSelfExtract=true `
+          -p:PublishTrimmed=false `
+          -p:EnableCompressionInSingleFile=true
+
+    - name: Verify published files
+      run: |
+        Write-Host "Published files:" -ForegroundColor Green
+        Get-ChildItem -Path "publish\TaskbarEqualizer" -Recurse | Select-Object Name, Length, LastWriteTime | Format-Table
+        
+        $exePath = "publish\TaskbarEqualizer\TaskbarEqualizer.exe"
+        if (Test-Path $exePath) {
+          $fileInfo = Get-Item $exePath
+          Write-Host "✅ TaskbarEqualizer.exe found: $([math]::Round($fileInfo.Length / 1MB, 1)) MB" -ForegroundColor Green
+        } else {
+          Write-Host "❌ TaskbarEqualizer.exe not found!" -ForegroundColor Red
+          exit 1
+        }
+
+    - name: Test installer scripts
+      run: |
+        Write-Host "Testing installer script syntax..." -ForegroundColor Yellow
+        
+        # Test PowerShell installer syntax
+        $cleanScript = "installer\install-taskbar-equalizer-clean.ps1"
+        $simpleScript = "installer\install-simple.ps1"
+        
+        if (Test-Path $cleanScript) {
+          try {
+            $null = [System.Management.Automation.PSParser]::Tokenize((Get-Content $cleanScript -Raw), [ref]$null)
+            Write-Host "✅ Clean installer syntax OK" -ForegroundColor Green
+          } catch {
+            Write-Host "❌ Clean installer syntax error: $($_.Exception.Message)" -ForegroundColor Red
+            exit 1
+          }
+        }
+        
+        if (Test-Path $simpleScript) {
+          try {
+            $null = [System.Management.Automation.PSParser]::Tokenize((Get-Content $simpleScript -Raw), [ref]$null)
+            Write-Host "✅ Simple installer syntax OK" -ForegroundColor Green
+          } catch {
+            Write-Host "❌ Simple installer syntax error: $($_.Exception.Message)" -ForegroundColor Red
+            exit 1
+          }
+        }
+
+    - name: Create portable package
+      run: |
+        Write-Host "Creating portable package..." -ForegroundColor Yellow
+        
+        $portableDir = "portable\TaskbarEqualizer-Portable"
+        New-Item -ItemType Directory -Path $portableDir -Force | Out-Null
+        
+        # Copy executable and dependencies
+        Copy-Item "publish\TaskbarEqualizer\*" -Destination $portableDir -Recurse -Force
+        
+        # Create portable marker file
+        @"
+# TaskbarEqualizer Portable Mode
+This file indicates TaskbarEqualizer is running in portable mode.
+Settings will be stored in the same directory as the executable.
+"@ | Out-File -FilePath "$portableDir\portable.txt" -Encoding UTF8
+        
+        # Create portable launcher batch file
+        @"
+@echo off
+title TaskbarEqualizer Portable
+echo Starting TaskbarEqualizer in portable mode...
+echo.
+start "" "%~dp0TaskbarEqualizer.exe" --portable
+"@ | Out-File -FilePath "$portableDir\Launch TaskbarEqualizer.bat" -Encoding ASCII
+        
+        # Create readme for portable version
+        @"
+# TaskbarEqualizer Portable
+
+This is a portable version of TaskbarEqualizer that doesn't require installation.
+
+## How to Use:
+1. Double-click 'Launch TaskbarEqualizer.bat' to start
+2. Or run 'TaskbarEqualizer.exe' directly
+3. Settings are stored in this folder
+
+## Features:
+- No installation required
+- Self-contained executable
+- Portable settings storage
+- Full Windows 11 integration
+
+## System Requirements:
+- Windows 10 version 1903 or later
+- Windows 11 (recommended)
+
+Size: $([math]::Round((Get-ChildItem $portableDir -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB, 1)) MB
+"@ | Out-File -FilePath "$portableDir\README.txt" -Encoding UTF8
+        
+        Write-Host "✅ Portable package created: $portableDir" -ForegroundColor Green
+
+    - name: Create installer package
+      run: |
+        Write-Host "Creating installer package..." -ForegroundColor Yellow
+        
+        $installerDir = "installer-package"
+        New-Item -ItemType Directory -Path $installerDir -Force | Out-Null
+        
+        # Copy installer files
+        Copy-Item "installer\*" -Destination $installerDir -Recurse -Force
+        Copy-Item "publish" -Destination $installerDir -Recurse -Force
+        
+        # Create version info
+        $version = "1.0.0"
+        if ($env:GITHUB_REF -match "refs/tags/v(.+)") {
+          $version = $matches[1]
+        }
+        
+        @"
+# TaskbarEqualizer Installer Package
+Version: $version
+Build Date: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss UTC')
+Commit: $env:GITHUB_SHA
+Branch: $env:GITHUB_REF_NAME
+"@ | Out-File -FilePath "$installerDir\BUILD-INFO.txt" -Encoding UTF8
+        
+        Write-Host "✅ Installer package created: $installerDir" -ForegroundColor Green
+
+    - name: Upload installer artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: TaskbarEqualizer-Installer-${{ github.run_number }}
+        path: installer-package/
+        retention-days: 30
+
+    - name: Upload portable artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: TaskbarEqualizer-Portable-${{ github.run_number }}
+        path: portable/
+        retention-days: 30
+
+    - name: Create release assets (on tag)
+      if: startsWith(github.ref, 'refs/tags/v')
+      run: |
+        Write-Host "Creating release assets..." -ForegroundColor Yellow
+        
+        $version = $env:GITHUB_REF -replace 'refs/tags/v', ''
+        
+        # Create installer ZIP
+        Compress-Archive -Path "installer-package\*" -DestinationPath "TaskbarEqualizer-Installer-v$version.zip"
+        
+        # Create portable ZIP  
+        Compress-Archive -Path "portable\*" -DestinationPath "TaskbarEqualizer-Portable-v$version.zip"
+        
+        Write-Host "✅ Release assets created" -ForegroundColor Green
+
+    - name: Upload release assets
+      if: startsWith(github.ref, 'refs/tags/v')
+      uses: actions/upload-artifact@v4
+      with:
+        name: TaskbarEqualizer-Release-Assets
+        path: |
+          TaskbarEqualizer-Installer-*.zip
+          TaskbarEqualizer-Portable-*.zip
+        retention-days: 90
+
+  create-release:
+    runs-on: ubuntu-latest
+    needs: build-installer
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Download release assets
+      uses: actions/download-artifact@v4
+      with:
+        name: TaskbarEqualizer-Release-Assets
+        path: release-assets/
+
+    - name: Extract version from tag
+      id: version
+      run: |
+        VERSION=${GITHUB_REF#refs/tags/v}
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "Version: $VERSION"
+
+    - name: Generate release notes
+      id: release_notes
+      run: |
+        VERSION="${{ steps.version.outputs.version }}"
+        
+        # Read template and replace version placeholder
+        TEMPLATE_CONTENT=$(cat .github/RELEASE_TEMPLATE.md)
+        RELEASE_NOTES="${TEMPLATE_CONTENT//\{VERSION\}/$VERSION}"
+        
+        # Save to file for upload
+        echo "$RELEASE_NOTES" > release-notes.md
+        
+        # Also set as output (truncated for GitHub)
+        echo "notes<<EOF" >> $GITHUB_OUTPUT
+        echo "## TaskbarEqualizer v$VERSION" >> $GITHUB_OUTPUT
+        echo "" >> $GITHUB_OUTPUT
+        echo "Professional Audio Visualizer for Windows Taskbar" >> $GITHUB_OUTPUT
+        echo "" >> $GITHUB_OUTPUT
+        echo "### Download Options:" >> $GITHUB_OUTPUT
+        echo "- **Full Installer**: TaskbarEqualizer-Installer-v$VERSION.zip (~170MB)" >> $GITHUB_OUTPUT
+        echo "- **Portable Version**: TaskbarEqualizer-Portable-v$VERSION.zip (~165MB)" >> $GITHUB_OUTPUT
+        echo "" >> $GITHUB_OUTPUT
+        echo "### System Requirements:" >> $GITHUB_OUTPUT
+        echo "- Windows 10 version 1903 or later" >> $GITHUB_OUTPUT
+        echo "- Windows 11 (recommended)" >> $GITHUB_OUTPUT
+        echo "" >> $GITHUB_OUTPUT
+        echo "See full release notes and installation guide in the attached files." >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ github.ref_name }}
+        name: TaskbarEqualizer v${{ steps.version.outputs.version }}
+        body: ${{ steps.release_notes.outputs.notes }}
+        draft: false
+        prerelease: false
+        files: |
+          release-assets/TaskbarEqualizer-Installer-*.zip
+          release-assets/TaskbarEqualizer-Portable-*.zip
+          release-notes.md
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+  test-installer:
+    runs-on: windows-latest
+    needs: build-installer
+    if: github.event_name == 'pull_request'
+    
+    steps:
+    - name: Download installer artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: TaskbarEqualizer-Installer-${{ github.run_number }}
+        path: installer-test/
+
+    - name: Test installer (dry run)
+      run: |
+        Write-Host "Testing installer in dry-run mode..." -ForegroundColor Yellow
+        
+        cd installer-test
+        
+        # Test that required files exist
+        $requiredFiles = @(
+          "install-taskbar-equalizer-clean.ps1",
+          "install-simple.ps1", 
+          "Install TaskbarEqualizer.bat",
+          "publish\TaskbarEqualizer\TaskbarEqualizer.exe"
+        )
+        
+        foreach ($file in $requiredFiles) {
+          if (Test-Path $file) {
+            Write-Host "✅ Found: $file" -ForegroundColor Green
+          } else {
+            Write-Host "❌ Missing: $file" -ForegroundColor Red
+            exit 1
+          }
+        }
+        
+        # Test installer syntax and basic validation
+        Write-Host "Testing installer validation..." -ForegroundColor Yellow
+        
+        # Test clean installer with validation only
+        $result = & powershell.exe -ExecutionPolicy Bypass -Command {
+          try {
+            # Source the installer to check for syntax errors
+            . ".\install-taskbar-equalizer-clean.ps1" -WhatIf 2>&1 | Out-Null
+            return $true
+          } catch {
+            Write-Host "Error: $($_.Exception.Message)"
+            return $false
+          }
+        }
+        
+        if ($result) {
+          Write-Host "✅ Installer validation passed" -ForegroundColor Green
+        } else {
+          Write-Host "❌ Installer validation failed" -ForegroundColor Red
+          exit 1
+        }
+
+    - name: Test portable package
+      run: |
+        Write-Host "Testing portable package..." -ForegroundColor Yellow
+        
+        $portableDir = "installer-test\portable\TaskbarEqualizer-Portable"
+        
+        if (Test-Path "$portableDir\TaskbarEqualizer.exe") {
+          Write-Host "✅ Portable executable found" -ForegroundColor Green
+        } else {
+          Write-Host "❌ Portable executable missing" -ForegroundColor Red
+          exit 1
+        }
+        
+        if (Test-Path "$portableDir\portable.txt") {
+          Write-Host "✅ Portable marker found" -ForegroundColor Green
+        } else {
+          Write-Host "❌ Portable marker missing" -ForegroundColor Red
+          exit 1
+        }
+        
+        Write-Host "✅ Portable package validation passed" -ForegroundColor Green

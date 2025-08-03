@@ -1,0 +1,155 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+
+  <!-- Custom UI Configuration -->
+  <Fragment>
+    <UI Id="TaskbarEqualizerInstallerUI">
+      
+      <!-- Use WiX standard UI with customizations -->
+      <UIRef Id="WixUI_InstallDir" />
+      <UIRef Id="WixUI_ErrorProgressText" />
+
+      <!-- Custom Welcome Dialog -->
+      <DialogRef Id="WelcomeDlg" />
+      <DialogRef Id="LicenseAgreementDlg" />
+      <DialogRef Id="InstallDirDlg" />
+      <DialogRef Id="VerifyReadyDlg" />
+      <DialogRef Id="ProgressDlg" />
+      <DialogRef Id="ExitDialog" />
+
+      <!-- Property for Install Directory -->
+      <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
+
+      <!-- Custom Properties for UI -->
+      <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Start TaskbarEqualizer now" />
+      <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
+
+      <!-- Banner and Dialog Bitmaps -->
+      <Property Id="WIXUI_BANNERBMP" Value="Resources\Banner.bmp" />
+      <Property Id="WIXUI_DIALOGBMP" Value="Resources\Dialog.bmp" />
+
+      <!-- License RTF -->
+      <Property Id="WIXUI_LICENSETEXT" Value="Resources\License.rtf" />
+
+      <!-- Customization for Install Directory Dialog -->
+      <Publish Dialog="InstallDirDlg" Control="Next" Event="SetTargetPath" Value="[WIXUI_INSTALLDIR]" Order="1">1</Publish>
+      <Publish Dialog="InstallDirDlg" Control="Next" Event="DoAction" Value="WixUIValidatePath" Order="2">NOT WIXUI_DONTVALIDATEPATH</Publish>
+      <Publish Dialog="InstallDirDlg" Control="Next" Event="SpawnDialog" Value="InvalidDirDlg" Order="3"><![CDATA[NOT WIXUI_DONTVALIDATEPATH AND WIXUI_INSTALLDIR_VALID<>"1"]]></Publish>
+      <Publish Dialog="InstallDirDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" Order="4">WIXUI_DONTVALIDATEPATH OR WIXUI_INSTALLDIR_VALID="1"</Publish>
+      <Publish Dialog="InstallDirDlg" Control="ChangeFolder" Property="_BrowseProperty" Value="[WIXUI_INSTALLDIR]" Order="1">1</Publish>
+      <Publish Dialog="InstallDirDlg" Control="ChangeFolder" Event="SpawnDialog" Value="BrowseDlg" Order="2">1</Publish>
+
+      <!-- Exit Dialog Customization -->
+      <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="LaunchApplication" Order="1">WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 and NOT Installed</Publish>
+
+    </UI>
+
+    <!-- Custom Images -->
+    <Binary Id="BannerBmp" SourceFile="Resources\Banner.bmp" />
+    <Binary Id="DialogBmp" SourceFile="Resources\Dialog.bmp" />
+
+  </Fragment>
+
+  <!-- Custom Actions for Post-Install -->
+  <Fragment>
+    
+    <!-- Launch Application Custom Action -->
+    <CustomAction Id="LaunchApplication"
+                  BinaryKey="WixCA"
+                  DllEntry="WixShellExec"
+                  Execute="immediate"
+                  Return="check" />
+
+    <!-- Set Launch Application Properties -->
+    <Property Id="WixShellExecTarget" Value="[#TaskbarEqualizer.exe]" />
+    <CustomAction Id="SetLaunchApplicationProperties"
+                  Property="WixShellExecTarget"
+                  Value="[#TaskbarEqualizer.exe]" />
+
+    <!-- Custom Action to Open Settings -->
+    <CustomAction Id="OpenSettings"
+                  BinaryKey="WixCA"
+                  DllEntry="WixShellExec"
+                  Execute="immediate"
+                  Return="check" />
+
+    <!-- Registry Custom Actions -->
+    <CustomAction Id="RegisterAutoStart"
+                  Property="ARPINSTALLLOCATION"
+                  Value="[INSTALLFOLDER]"
+                  Execute="immediate" />
+
+  </Fragment>
+
+  <!-- Installation Sequence -->
+  <Fragment>
+    
+    <InstallExecuteSequence>
+      <!-- Pre-install actions -->
+      <Custom Action="SetLaunchApplicationProperties" Before="LaunchApplication">
+        NOT Installed AND NOT REMOVE
+      </Custom>
+      
+      <!-- Post-install actions -->
+      <Custom Action="RegisterAutoStart" After="InstallFiles">
+        NOT Installed AND NOT REMOVE
+      </Custom>
+
+      <!-- Launch application after install -->
+      <Custom Action="LaunchApplication" After="InstallFinalize">
+        <![CDATA[NOT Installed AND NOT REMOVE AND WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1]]>
+      </Custom>
+    </InstallExecuteSequence>
+
+    <InstallUISequence>
+      <!-- UI sequence customizations -->
+      <Show Dialog="WelcomeDlg" Before="ProgressDlg">NOT Installed</Show>
+      <Show Dialog="LicenseAgreementDlg" After="WelcomeDlg">NOT Installed</Show>
+      <Show Dialog="InstallDirDlg" After="LicenseAgreementDlg">NOT Installed</Show>
+      <Show Dialog="VerifyReadyDlg" After="InstallDirDlg">NOT Installed</Show>
+    </InstallUISequence>
+
+  </Fragment>
+
+  <!-- Features Selection Dialog (Advanced) -->
+  <Fragment>
+    
+    <UI Id="AdvancedUI">
+      <DialogRef Id="FeaturesDlg" />
+      
+      <!-- Custom Features Dialog -->
+      <Dialog Id="CustomFeaturesDlg" Width="370" Height="270" Title="TaskbarEqualizer - Feature Selection">
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="200" Height="15" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Title}Select Features" />
+        <Control Id="Description" Type="Text" X="25" Y="23" Width="280" Height="15" Transparent="yes" NoPrefix="yes" Text="Choose which features to install:" />
+        
+        <!-- Feature Selection Controls -->
+        <Control Id="CoreFeatureCheck" Type="CheckBox" X="25" Y="50" Width="280" Height="15" Property="INSTALL_CORE" CheckBoxValue="1" Text="Core Application (Required)" />
+        <Control Id="AutoStartCheck" Type="CheckBox" X="25" Y="70" Width="280" Height="15" Property="INSTALL_AUTOSTART" CheckBoxValue="1" Text="Start with Windows" />
+        <Control Id="FileAssocCheck" Type="CheckBox" X="25" Y="90" Width="280" Height="15" Property="INSTALL_FILEASSOC" CheckBoxValue="1" Text="File Associations" />
+        <Control Id="DocumentationCheck" Type="CheckBox" X="25" Y="110" Width="280" Height="15" Property="INSTALL_DOCS" CheckBoxValue="1" Text="Documentation" />
+
+        <!-- Navigation Buttons -->
+        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="{\WixUI_Font_Normal}&lt; Back" />
+        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="{\WixUI_Font_Normal}&amp;Next &gt;" />
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="{\WixUI_Font_Normal}Cancel" />
+
+        <!-- Publish Events -->
+        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="{\WixUI_Font_Normal}&amp;Next &gt;">
+          <Publish Event="NewDialog" Value="VerifyReadyDlg">1</Publish>
+        </Control>
+        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="{\WixUI_Font_Normal}&lt; Back">
+          <Publish Event="NewDialog" Value="InstallDirDlg">1</Publish>
+        </Control>
+      </Dialog>
+
+    </UI>
+
+    <!-- Feature Selection Properties -->
+    <Property Id="INSTALL_CORE" Value="1" />
+    <Property Id="INSTALL_AUTOSTART" Value="1" />
+    <Property Id="INSTALL_FILEASSOC" Value="0" />
+    <Property Id="INSTALL_DOCS" Value="1" />
+
+  </Fragment>
+
+</Wix>

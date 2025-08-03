@@ -1,0 +1,51 @@
+<Project Sdk="WiX.SDK/4.0.0">
+
+  <PropertyGroup>
+    <OutputName>TaskbarEqualizerSetup</OutputName>
+    <OutputType>Package</OutputType>
+    <WixTargetsPath Condition="'$(WixTargetsPath)' == '' AND '$(MSBuildExtensionsPath32)' != ''">$(MSBuildExtensionsPath32)\Microsoft\WiX\v3.x\Wix.targets</WixTargetsPath>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <!-- Version information -->
+    <ProductVersion>1.0.0</ProductVersion>
+    <ProductCode>*</ProductCode>
+    <UpgradeCode>{12345678-1234-1234-1234-123456789012}</UpgradeCode>
+    <PackageId>*</PackageId>
+    
+    <!-- Company and product information -->
+    <Manufacturer>Graphlight</Manufacturer>
+    <ProductName>TaskbarEqualizer</ProductName>
+    <PackageDescription>Professional audio visualizer for Windows taskbar with real-time FFT analysis</PackageDescription>
+    <PackageComments>TaskbarEqualizer - Audio Visualization Made Professional</PackageComments>
+    
+    <!-- Platform configuration -->
+    <Platform>x64</Platform>
+    <InstallerVersion>500</InstallerVersion>
+    <Compressed>yes</Compressed>
+    <EmbedCab>yes</EmbedCab>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Reference the main application project -->
+    <ProjectReference Include="..\..\src\TaskbarEqualizer\TaskbarEqualizer.csproj">
+      <Name>TaskbarEqualizer</Name>
+      <RefProjectOutputGroups>Binaries;Content;Satellites</RefProjectOutputGroups>
+      <RefTargetDir>INSTALLFOLDER</RefTargetDir>
+    </ProjectReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- WiX source files -->
+    <Compile Include="Product.wxs" />
+    <Compile Include="Components.wxs" />
+    <Compile Include="UI.wxs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Resources -->
+    <Content Include="Resources\**" />
+    <Content Include="License.rtf" />
+  </ItemGroup>
+
+</Project>

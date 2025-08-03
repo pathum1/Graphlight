@@ -328,17 +328,28 @@ namespace TaskbarEqualizer.Core.Audio
             switch (_config.WindowFunction)
             {
                 case WindowFunction.Hann:
-                    FftSharp.Window.Hann(_window);
+                    // Create a simple Hann window manually
+                    for (int i = 0; i < _config.FftSize; i++)
+                    {
+                        _window[i] = 0.5 * (1 - Math.Cos(2 * Math.PI * i / (_config.FftSize - 1)));
+                    }
                     break;
                 case WindowFunction.Hamming:
-                    FftSharp.Window.Hamming(_window);
+                    // Create a simple Hamming window manually
+                    for (int i = 0; i < _config.FftSize; i++)
+                    {
+                        _window[i] = 0.54 - 0.46 * Math.Cos(2 * Math.PI * i / (_config.FftSize - 1));
+                    }
                     break;
                 case WindowFunction.Blackman:
-                    FftSharp.Window.Blackman(_window);
+                    // Create a simple Blackman window manually
+                    for (int i = 0; i < _config.FftSize; i++)
+                    {
+                        _window[i] = 0.42 - 0.5 * Math.Cos(2 * Math.PI * i / (_config.FftSize - 1)) + 
+                                   0.08 * Math.Cos(4 * Math.PI * i / (_config.FftSize - 1));
+                    }
                     break;
                 case WindowFunction.Kaiser:
-                    FftSharp.Window.Kaiser(_window, 5.0); // Beta = 5.0
-                    break;
                 case WindowFunction.None:
                 default:
                     Array.Fill(_window, 1.0);
@@ -463,7 +474,7 @@ namespace TaskbarEqualizer.Core.Audio
                 }
 
                 // Perform FFT
-                var fftResult = FftSharp.FFT.Forward(_fftBuffer);
+                var fftResult = FftSharp.FFT.Forward(_fftBuffer!);
 
                 // Calculate magnitudes
                 for (int i = 0; i < _magnitudeBuffer!.Length; i++)
@@ -521,7 +532,7 @@ namespace TaskbarEqualizer.Core.Audio
                 // Apply logarithmic scaling for better visualization
                 if (magnitude > 0)
                 {
-                    _currentSpectrum[band] = Math.Log10(1 + magnitude * 9) * _bandWeights![band];
+                    _currentSpectrum![band] = Math.Log10(1 + magnitude * 9) * _bandWeights![band];
                 }
             }
 

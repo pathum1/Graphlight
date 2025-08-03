@@ -260,6 +260,9 @@ namespace TaskbarEqualizer.Core
 
             _logger.LogInformation("Switching audio device to: {DeviceName}", device?.FriendlyName ?? "Default");
 
+            if (device == null)
+                throw new ArgumentNullException(nameof(device));
+                
             await _audioCapture.SwitchDeviceAsync(device, cancellationToken);
         }
 

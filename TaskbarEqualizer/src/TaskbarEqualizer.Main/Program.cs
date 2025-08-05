@@ -32,9 +32,34 @@ namespace TaskbarEqualizer.Main
         [STAThread]
         public static async Task<int> Main(string[] args)
         {
+            // Emergency logging - always available
+            void EmergencyLog(string message, Exception? ex = null)
+            {
+                var timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+                var logMessage = $"[{timestamp}] TaskbarEqualizer: {message}";
+                if (ex != null) logMessage += $"\nException: {ex}";
+                
+                Console.WriteLine(logMessage);
+                System.Diagnostics.Debug.WriteLine(logMessage);
+                
+                // Also try to write to temp file as backup
+                try
+                {
+                    var tempFile = Path.Combine(Path.GetTempPath(), "TaskbarEqualizer_Emergency.log");
+                    File.AppendAllText(tempFile, logMessage + Environment.NewLine);
+                }
+                catch { /* Ignore temp file errors */ }
+            }
+
+            EmergencyLog("=== TaskbarEqualizer Starting ===");
+            EmergencyLog($"Args: [{string.Join(", ", args)}]");
+            EmergencyLog($"OS: {Environment.OSVersion}");
+            EmergencyLog($".NET Version: {Environment.Version}");
+
             // Enable visual styles for Windows Forms
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
+            EmergencyLog("Windows Forms initialized");
 
             try
             {
@@ -44,13 +69,20 @@ namespace TaskbarEqualizer.Main
                 bool isMinimized = Array.Exists(args, arg => 
                     arg.Equals("--minimized", StringComparison.OrdinalIgnoreCase));
 
-                // Create host builder with all services
+                EmergencyLog($"Parsed args - Portable: {isPortable}, Minimized: {isMinimized}");
+
+                // Create host builder with all services - REMOVED UseWindowsService()
+                EmergencyLog("Creating host builder...");
                 var hostBuilder = Host.CreateDefaultBuilder(args)
                     .ConfigureServices((context, services) =>
                     {
+                        EmergencyLog("Configuring services...");
                         // Add all TaskbarEqualizer services
+                        EmergencyLog("Adding CoreAudioServices...");
                         services.AddCoreAudioServices();
+                        EmergencyLog("Adding SystemTrayServices...");
                         services.AddSystemTrayServices();
+                        EmergencyLog("Adding Phase3Services...");
                         services.AddPhase3Services();
 
                         // Configure portable mode if specified
@@ -64,32 +96,48 @@ namespace TaskbarEqualizer.Main
                     {
                         logging.ClearProviders();
                         
-                        // Only add console logging in debug mode or if console is available
-                        if (System.Diagnostics.Debugger.IsAttached || Console.IsInputRedirected == false)
-                        {
-                            try
-                            {
-                                logging.AddConsole();
-                            }
-                            catch
-                            {
-                                // Ignore console logging if not available
-                            }
-                        }
+                        // Always add console logging for debugging
+                        logging.AddConsole();
                         
                         // Add file logging for production
-                        logging.AddEventLog();
-                        logging.SetMinimumLevel(LogLevel.Information);
-                    })
-                    .UseWindowsService(); // Allow running as Windows service
+                        logging.AddFilter("TaskbarEqualizer", LogLevel.Information);
+                        logging.SetMinimumLevel(LogLevel.Debug);
+                    
+                        // Add event log for production
+                        try 
+                        {
+                            logging.AddEventLog();
+                        }
+                        catch 
+                        {
+                            // Event log might not be available
+                        }
+                    });
 
                 // Build the host
+                EmergencyLog("Building host...");
                 _host = hostBuilder.Build();
+                EmergencyLog("Host built successfully");
 
                 // Get required services
+                EmergencyLog("Getting required services...");
                 var logger = _host.Services.GetRequiredService<ILogger<Program>>();
+                EmergencyLog("Logger service obtained");
                 _systemTrayManager = _host.Services.GetRequiredService<ISystemTrayManager>();
+                EmergencyLog("SystemTray service obtained");
                 _orchestrator = _host.Services.GetRequiredService<ApplicationOrchestrator>();
+                EmergencyLog("Orchestrator service obtained");
+                
+                // Test context menu manager
+                try 
+                {
+                    var contextMenu = _host.Services.GetRequiredService<IContextMenuManager>();
+                    EmergencyLog("ContextMenu service obtained successfully");
+                } 
+                catch (Exception ex) 
+                {
+                    EmergencyLog($"ContextMenu service FAILED: {ex.Message}");
+                }
 
                 // Log startup
                 logger.LogInformation("TaskbarEqualizer starting...");
@@ -97,39 +145,28 @@ namespace TaskbarEqualizer.Main
                 logger.LogInformation("Minimized start: {IsMinimized}", isMinimized);
 
                 // Start the host services
+                EmergencyLog("Starting host services...");
                 await _host.StartAsync();
-
-                // Initialize system tray with default icon
-                var trayIcon = SystemIcons.Application; // Use default system icon for now
-                await _systemTrayManager.InitializeAsync(trayIcon, "TaskbarEqualizer - Professional Audio Visualizer");
-                logger.LogInformation("System tray initialized");
-
-                // Start the orchestrator
-                await _orchestrator.StartAsync(default);
-                logger.LogInformation("Application orchestrator started");
+                EmergencyLog("Host services started");
 
                 // Setup application exit handling
                 Application.ApplicationExit += OnApplicationExit;
                 AppDomain.CurrentDomain.ProcessExit += OnProcessExit;
 
-                // Show startup notification (unless minimized)
-                if (!isMinimized)
-                {
-                    await _systemTrayManager.ShowBalloonTipAsync(
-                        "TaskbarEqualizer Started", 
-                        "Professional audio visualizer is now running. Right-click the tray icon for options.",
-                        BalloonTipIcon.Info);
-                }
-
                 logger.LogInformation("TaskbarEqualizer started successfully");
+                EmergencyLog("=== TaskbarEqualizer Started Successfully ===");
 
-                // Run the Windows Forms message loop
-                Application.Run();
+                // Run the Windows Forms message loop with custom application context
+                EmergencyLog("Starting Windows Forms message loop...");
+                Application.Run(new TaskbarEqualizerApplicationContext(_systemTrayManager, _orchestrator, logger, isMinimized));
+                EmergencyLog("Windows Forms message loop ended");
 
                 return 0;
             }
             catch (Exception ex)
             {
+                EmergencyLog("=== CRITICAL ERROR ===", ex);
+                
                 // Log to Windows Event Log if possible
                 try
                 {
@@ -137,9 +174,12 @@ namespace TaskbarEqualizer.Main
                     eventLog.Source = "TaskbarEqualizer";
                     eventLog.WriteEntry($"TaskbarEqualizer failed to start: {ex.Message}\n\n{ex}", 
                         System.Diagnostics.EventLogEntryType.Error);
+                    EmergencyLog("Error logged to Windows Event Log");
                 }
-                catch
+                catch (Exception eventLogEx)
                 {
+                    EmergencyLog("Failed to log to Windows Event Log", eventLogEx);
+                    
                     // If event logging fails, try file logging
                     try
                     {
@@ -149,13 +189,16 @@ namespace TaskbarEqualizer.Main
                         Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
                         await File.WriteAllTextAsync(logPath, 
                             $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] TaskbarEqualizer startup error: {ex}");
+                        EmergencyLog($"Error logged to file: {logPath}");
                     }
-                    catch
+                    catch (Exception fileLogEx)
                     {
-                        // Last resort - ignore if all logging fails
+                        EmergencyLog("Failed to log to file", fileLogEx);
+                        // Emergency logging should have captured everything to console/temp file
                     }
                 }
 
+                EmergencyLog("=== APPLICATION EXITING WITH ERROR CODE 1 ===");
                 return 1;
             }
         }

@@ -93,26 +93,55 @@ namespace TaskbarEqualizer.SystemTray
 
             try
             {
-                await Task.Run(() =>
+                // Check if we're already on the UI thread
+                if (SynchronizationContext.Current != null && SynchronizationContext.Current is WindowsFormsSynchronizationContext)
                 {
+                    // We're on the UI thread, create directly
                     lock (_trayLock)
                     {
-                        // Create the NotifyIcon on the UI thread
-                        if (SynchronizationContext.Current == null)
-                        {
-                            // We're not on the UI thread, we need to invoke on it
-                            var form = new Form(); // Temporary form to get UI context
-                            form.Invoke(new Action(() => CreateNotifyIcon(initialIcon, toolTipText)));
-                            form.Dispose();
-                        }
-                        else
-                        {
-                            CreateNotifyIcon(initialIcon, toolTipText);
-                        }
-
+                        CreateNotifyIcon(initialIcon, toolTipText);
                         _isInitialized = true;
                     }
-                }, cancellationToken);
+                }
+                else
+                {
+                    // We need to marshal to the UI thread
+                    // Use TaskScheduler.FromCurrentSynchronizationContext() to properly marshal
+                    var tcs = new TaskCompletionSource<bool>();
+                    
+                    WindowsFormsSynchronizationContext.Current?.Post(_ =>
+                    {
+                        try
+                        {
+                            lock (_trayLock)
+                            {
+                                CreateNotifyIcon(initialIcon, toolTipText);
+                                _isInitialized = true;
+                            }
+                            tcs.SetResult(true);
+                        }
+                        catch (Exception ex)
+                        {
+                            tcs.SetException(ex);
+                        }
+                    }, null);
+                    
+                    // If no WindowsFormsSynchronizationContext, fall back to Control.Invoke pattern
+                    if (WindowsFormsSynchronizationContext.Current == null)
+                    {
+                        await Task.Run(() =>
+                        {
+                            lock (_trayLock)
+                            {
+                                CreateNotifyIcon(initialIcon, toolTipText);
+                                _isInitialized = true;
+                            }
+                        }, cancellationToken);
+                        tcs.SetResult(true);
+                    }
+                    
+                    await tcs.Task;
+                }
 
                 _logger.LogDebug("SystemTrayManager initialized successfully");
             }

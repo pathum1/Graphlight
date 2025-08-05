@@ -50,14 +50,30 @@ namespace TaskbarEqualizer
                 Console.WriteLine("Phase 1 complete - ready for Phase 2 visualization!");
                 Console.WriteLine("Press any key to exit...");
                 
-                Console.ReadKey();
+                try
+                {
+                    Console.ReadKey();
+                }
+                catch (InvalidOperationException)
+                {
+                    // No console available - just wait 3 seconds
+                    System.Threading.Thread.Sleep(3000);
+                }
                 return 0;
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"Application failed to start: {ex.Message}");
                 Console.WriteLine("Press any key to exit...");
-                Console.ReadKey();
+                try
+                {
+                    Console.ReadKey();
+                }
+                catch (InvalidOperationException)
+                {
+                    // No console available - just wait 3 seconds
+                    System.Threading.Thread.Sleep(3000);
+                }
                 return 1;
             }
         }

@@ -16,7 +16,15 @@
       "Bash(dotnet publish:*)",
       "Bash(ls:*)",
       "Bash(powershell.exe:*)",
-      "Bash(tasklist:*)"
+      "Bash(tasklist:*)",
+      "Bash(powershell:*)",
+      "Bash(Get-Content output.log -ErrorAction SilentlyContinue)",
+      "Bash(dotnet clean:*)",
+      "Bash(.TaskbarEqualizer.Main.exe)",
+      "Bash(TaskbarEqualizer.Main.exe)",
+      "Bash(find:*)",
+      "Bash(taskkill:*)",
+      "Bash(timeout:*)"
     ],
     "deny": []
   }

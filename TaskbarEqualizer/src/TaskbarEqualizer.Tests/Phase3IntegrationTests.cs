@@ -4,7 +4,7 @@ using System.Threading.Tasks;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using Microsoft.VisualStudio.TestTools.UnitTesting;
+using Xunit;
 using TaskbarEqualizer.Configuration.DependencyInjection;
 using TaskbarEqualizer.Configuration.Interfaces;
 using TaskbarEqualizer.SystemTray.DependencyInjection;
@@ -12,16 +12,14 @@ using TaskbarEqualizer.SystemTray.Interfaces;
 
 namespace TaskbarEqualizer.Tests
 {
-    [TestClass]
-    public class Phase3IntegrationTests
+    public class Phase3IntegrationTests : IDisposable
     {
         private IHost? _host;
         private IServiceProvider? _services;
 
-        [TestInitialize]
-        public async Task Setup()
+        public Phase3IntegrationTests()
         {
-            var hostBuilder = Host.CreateDefaultBuilder()
+            var hostBuilder = Microsoft.Extensions.Hosting.Host.CreateDefaultBuilder()
                 .ConfigureServices((context, services) =>
                 {
                     services.AddLogging(builder =>
@@ -36,35 +34,34 @@ namespace TaskbarEqualizer.Tests
                 });
 
             _host = hostBuilder.Build();
-            await _host.StartAsync();
+            _host.StartAsync().GetAwaiter().GetResult();
             _services = _host.Services;
         }
 
-        [TestCleanup]
-        public async Task Cleanup()
+        public void Dispose()
         {
             if (_host != null)
             {
-                await _host.StopAsync();
+                _host.StopAsync().GetAwaiter().GetResult();
                 _host.Dispose();
             }
         }
 
-        [TestMethod]
+        [Fact]
         public void Test_ServiceRegistration()
         {
-            Assert.IsNotNull(_services, "Service provider should be initialized");
+            Assert.NotNull(_services);
             
             var settingsManager = _services.GetService<ISettingsManager>();
             var contextMenuManager = _services.GetService<IContextMenuManager>();
             var autoStartManager = _services.GetService<IAutoStartManager>();
 
-            Assert.IsNotNull(settingsManager, "SettingsManager should be registered");
-            Assert.IsNotNull(contextMenuManager, "ContextMenuManager should be registered");
-            Assert.IsNotNull(autoStartManager, "AutoStartManager should be registered");
+            Assert.NotNull(settingsManager);
+            Assert.NotNull(contextMenuManager);
+            Assert.NotNull(autoStartManager);
         }
 
-        [TestMethod]
+        [Fact]
         public async Task Test_SettingsManager()
         {
             var settingsManager = _services!.GetRequiredService<ISettingsManager>();
@@ -74,35 +71,35 @@ namespace TaskbarEqualizer.Tests
             {
                 await settingsManager.LoadAsync();
             }
-            Assert.IsTrue(settingsManager.IsLoaded, "Settings should be loaded");
+            Assert.True(settingsManager.IsLoaded);
 
             // Test getting/setting values
             var testKey = "TestSetting";
             var testValue = "TestValue123";
             
             await settingsManager.SetSetting(testKey, testValue);
-            var retrievedValue = await settingsManager.GetSetting<string>(testKey, "DefaultValue");
+            var retrievedValue = settingsManager.GetSetting<string>(testKey, "DefaultValue");
             
-            Assert.AreEqual(testValue, retrievedValue, "Setting value should match");
+            Assert.Equal(testValue, retrievedValue);
         }
 
-        [TestMethod]
+        [Fact]
         public async Task Test_AutoStartManager()
         {
             var autoStartManager = _services!.GetRequiredService<IAutoStartManager>();
 
-            // Test status check
+            // Test status check - IsAutoStartEnabledAsync returns Task<bool>, not Task<bool?>
             var isEnabled = await autoStartManager.IsAutoStartEnabledAsync();
-            Assert.IsNotNull(isEnabled, "Auto-start status should be determinable");
+            Assert.True(isEnabled == true || isEnabled == false); // bool can only be true or false
 
             // Test validation
             var validation = await autoStartManager.ValidateAutoStartAsync();
-            Assert.IsNotNull(validation, "Validation result should not be null");
-            Assert.IsNotNull(validation.Errors, "Validation errors collection should not be null");
-            Assert.IsNotNull(validation.Warnings, "Validation warnings collection should not be null");
+            Assert.NotNull(validation);
+            Assert.NotNull(validation.Errors);
+            Assert.NotNull(validation.Warnings);
         }
 
-        [TestMethod]
+        [Fact]
         public void Test_ContextMenuManager()
         {
             var contextMenuManager = _services!.GetRequiredService<IContextMenuManager>();
@@ -114,10 +111,11 @@ namespace TaskbarEqualizer.Tests
             };
 
             // Test that the event handler is set up
-            Assert.IsNotNull(contextMenuManager, "Context menu manager should be available");
+            Assert.NotNull(contextMenuManager);
+            Assert.False(eventFired); // Event hasn't fired yet
         }
 
-        [TestMethod]
+        [Fact]
         public async Task Test_CrossComponentCommunication()
         {
             var settingsManager = _services!.GetRequiredService<ISettingsManager>();
@@ -143,7 +141,8 @@ namespace TaskbarEqualizer.Tests
             // Give events time to propagate
             await Task.Delay(100);
 
-            Assert.IsTrue(settingsEventFired, "Settings changed event should fire");
+            Assert.True(settingsEventFired);
+            Assert.False(autoStartEventFired); // AutoStart event shouldn't fire for this setting
         }
     }
 }

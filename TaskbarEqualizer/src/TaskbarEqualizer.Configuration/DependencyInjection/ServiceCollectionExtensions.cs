@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using TaskbarEqualizer.Configuration.Interfaces;
 using TaskbarEqualizer.Configuration.Services;
+using TaskbarEqualizer.Core.DependencyInjection;
 
 namespace TaskbarEqualizer.Configuration.DependencyInjection
 {
@@ -83,8 +84,13 @@ namespace TaskbarEqualizer.Configuration.DependencyInjection
             // Add all configuration services with auto-loading
             services.AddConfigurationServicesWithAutoLoad(settingsFilePath, true);
 
-            // Add application orchestrator as hosted service
-            services.AddHostedService<ApplicationOrchestrator>();
+            // Add core audio services
+            services.AddCoreAudioServices();
+
+            // Add application orchestrator as both singleton and hosted service
+            services.AddSingleton<ApplicationOrchestrator>();
+            services.AddHostedService<ApplicationOrchestrator>(provider => 
+                provider.GetRequiredService<ApplicationOrchestrator>());
 
             return services;
         }

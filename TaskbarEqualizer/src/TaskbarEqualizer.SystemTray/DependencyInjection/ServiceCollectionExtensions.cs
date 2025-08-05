@@ -30,6 +30,9 @@ namespace TaskbarEqualizer.SystemTray.DependencyInjection
             
             // System tray integration
             services.TryAddSingleton<ISystemTrayManager, SystemTrayManager>();
+            
+            // Taskbar overlay integration
+            services.TryAddSingleton<ITaskbarOverlayManager, TaskbarOverlayManager>();
 
             return services;
         }

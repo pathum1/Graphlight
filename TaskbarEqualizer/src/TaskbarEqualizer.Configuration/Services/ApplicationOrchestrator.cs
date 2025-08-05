@@ -5,6 +5,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using TaskbarEqualizer.Configuration.Interfaces;
 using TaskbarEqualizer.SystemTray.Interfaces;
+using TaskbarEqualizer.Core.Interfaces;
 
 namespace TaskbarEqualizer.Configuration.Services
 {
@@ -17,6 +18,10 @@ namespace TaskbarEqualizer.Configuration.Services
         private readonly ISettingsManager _settingsManager;
         private readonly IContextMenuManager _contextMenuManager;
         private readonly IAutoStartManager _autoStartManager;
+        private readonly ITaskbarOverlayManager _taskbarOverlayManager;
+        private readonly IAudioCaptureService _audioCaptureService;
+        private readonly IFrequencyAnalyzer _frequencyAnalyzer;
+        private readonly ISystemTrayManager _systemTrayManager;
         private readonly ILogger<ApplicationOrchestrator> _logger;
 
         private bool _isInitialized;
@@ -28,16 +33,28 @@ namespace TaskbarEqualizer.Configuration.Services
         /// <param name="settingsManager">Settings manager for configuration persistence.</param>
         /// <param name="contextMenuManager">Context menu manager for user interface.</param>
         /// <param name="autoStartManager">Auto-start manager for Windows startup integration.</param>
+        /// <param name="taskbarOverlayManager">Taskbar overlay manager for audio visualization.</param>
+        /// <param name="audioCaptureService">Audio capture service for real-time audio data.</param>
+        /// <param name="frequencyAnalyzer">Frequency analyzer for spectrum analysis.</param>
+        /// <param name="systemTrayManager">System tray manager for tray icon and context menu.</param>
         /// <param name="logger">Logger for diagnostic information.</param>
         public ApplicationOrchestrator(
             ISettingsManager settingsManager,
             IContextMenuManager contextMenuManager,
             IAutoStartManager autoStartManager,
+            ITaskbarOverlayManager taskbarOverlayManager,
+            IAudioCaptureService audioCaptureService,
+            IFrequencyAnalyzer frequencyAnalyzer,
+            ISystemTrayManager systemTrayManager,
             ILogger<ApplicationOrchestrator> logger)
         {
             _settingsManager = settingsManager ?? throw new ArgumentNullException(nameof(settingsManager));
             _contextMenuManager = contextMenuManager ?? throw new ArgumentNullException(nameof(contextMenuManager));
             _autoStartManager = autoStartManager ?? throw new ArgumentNullException(nameof(autoStartManager));
+            _taskbarOverlayManager = taskbarOverlayManager ?? throw new ArgumentNullException(nameof(taskbarOverlayManager));
+            _audioCaptureService = audioCaptureService ?? throw new ArgumentNullException(nameof(audioCaptureService));
+            _frequencyAnalyzer = frequencyAnalyzer ?? throw new ArgumentNullException(nameof(frequencyAnalyzer));
+            _systemTrayManager = systemTrayManager ?? throw new ArgumentNullException(nameof(systemTrayManager));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
             _logger.LogDebug("ApplicationOrchestrator initialized");
@@ -156,7 +173,7 @@ namespace TaskbarEqualizer.Configuration.Services
         /// <returns>Task representing the asynchronous operation.</returns>
         private async Task InitializeComponentsAsync(CancellationToken cancellationToken)
         {
-            _logger.LogDebug("Initializing Phase 3 components");
+            _logger.LogDebug("Initializing Phase 3 components with audio processing pipeline");
 
             // 1. Ensure settings are loaded first
             if (!_settingsManager.IsLoaded)
@@ -168,11 +185,108 @@ namespace TaskbarEqualizer.Configuration.Services
             // 2. Initialize context menu (no async initialization needed)
             _logger.LogDebug("Context menu manager ready");
 
-            // 3. Check auto-start status
+            // 3. Initialize frequency analyzer
+            await _frequencyAnalyzer.ConfigureAsync(
+                fftSize: 2048, // Increased to handle stereo audio (2 channels)
+                sampleRate: 44100,
+                frequencyBands: 32,
+                smoothingFactor: 0.8,
+                cancellationToken);
+            _logger.LogDebug("Frequency analyzer configured");
+
+            // 4. Initialize taskbar overlay
+            var overlayConfig = new OverlayConfiguration
+            {
+                Enabled = true,
+                Position = OverlayPosition.Center,
+                Width = 300,
+                Height = 40,
+                Opacity = 0.8f,
+                UpdateFrequency = 60
+            };
+            
+            await _taskbarOverlayManager.InitializeAsync(overlayConfig, cancellationToken);
+            _logger.LogDebug("Taskbar overlay manager initialized");
+
+            // 5. Setup audio processing pipeline
+            SetupAudioProcessingPipeline();
+
+            // 6. Start audio capture and analysis
+            await _frequencyAnalyzer.StartAnalysisAsync(cancellationToken);
+            await _audioCaptureService.StartCaptureAsync(cancellationToken);
+            _logger.LogDebug("Audio capture and analysis started");
+
+            // 7. Show taskbar overlay
+            await _taskbarOverlayManager.ShowAsync(cancellationToken);
+            _logger.LogDebug("Taskbar overlay shown");
+
+            // 8. Check auto-start status
             var autoStartEnabled = await _autoStartManager.IsAutoStartEnabledAsync(cancellationToken);
             _logger.LogDebug("Auto-start status checked: {Enabled}", autoStartEnabled);
 
             _logger.LogDebug("All Phase 3 components initialized successfully");
+        }
+
+        /// <summary>
+        /// Sets up the audio processing pipeline by connecting services.
+        /// </summary>
+        private void SetupAudioProcessingPipeline()
+        {
+            _logger.LogDebug("Setting up audio processing pipeline");
+
+            // Connect audio capture to frequency analyzer
+            _audioCaptureService.AudioDataAvailable += OnAudioDataAvailable;
+
+            // Connect frequency analyzer to taskbar overlay
+            _frequencyAnalyzer.SpectrumDataAvailable += OnSpectrumDataAvailable;
+
+            _logger.LogDebug("Audio processing pipeline configured");
+        }
+
+        /// <summary>
+        /// Handles audio data from the capture service and forwards to frequency analyzer.
+        /// </summary>
+        private async void OnAudioDataAvailable(object? sender, AudioDataEventArgs e)
+        {
+            try
+            {
+                await _frequencyAnalyzer.ProcessAudioSamplesAsync(e.Samples, e.SampleCount, e.TimestampTicks);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Error processing audio data");
+            }
+        }
+
+        /// <summary>
+        /// Handles spectrum data from the frequency analyzer and forwards to taskbar overlay.
+        /// </summary>
+        private void OnSpectrumDataAvailable(object? sender, SpectrumDataEventArgs e)
+        {
+            try
+            {
+                _taskbarOverlayManager.UpdateVisualization(e);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Error updating taskbar visualization");
+            }
+        }
+
+        /// <summary>
+        /// Handles context menu requests from the system tray.
+        /// </summary>
+        private async void OnContextMenuRequested(object? sender, ContextMenuRequestedEventArgs e)
+        {
+            try
+            {
+                _logger.LogDebug("Context menu requested at location {Location}", e.MenuLocation);
+                await _contextMenuManager.ShowMenuAsync(e.MenuLocation);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error showing context menu");
+            }
         }
 
         /// <summary>
@@ -184,6 +298,9 @@ namespace TaskbarEqualizer.Configuration.Services
 
             // Handle context menu item clicks
             _contextMenuManager.MenuItemClicked += OnContextMenuItemClicked;
+
+            // Handle context menu requests from system tray
+            _systemTrayManager.ContextMenuRequested += OnContextMenuRequested;
 
             // Handle settings changes
             _settingsManager.SettingsChanged += OnSettingsChanged;
@@ -202,6 +319,7 @@ namespace TaskbarEqualizer.Configuration.Services
             _logger.LogDebug("Cleaning up event handlers");
 
             _contextMenuManager.MenuItemClicked -= OnContextMenuItemClicked;
+            _systemTrayManager.ContextMenuRequested -= OnContextMenuRequested;
             _settingsManager.SettingsChanged -= OnSettingsChanged;
             _autoStartManager.AutoStartChanged -= OnAutoStartChanged;
 

@@ -1,0 +1,23 @@
+[2025-08-04 21:19:19] TaskbarEqualizer: === TaskbarEqualizer Starting ===
+[2025-08-04 21:19:19] TaskbarEqualizer: Args: []
+[2025-08-04 21:19:19] TaskbarEqualizer: OS: Microsoft Windows NT 10.0.26100.0
+[2025-08-04 21:19:19] TaskbarEqualizer: .NET Version: 8.0.18
+[2025-08-04 21:19:19] TaskbarEqualizer: Windows Forms initialized
+[2025-08-04 21:19:19] TaskbarEqualizer: Parsed args - Portable: False, Minimized: False
+[2025-08-04 21:19:19] TaskbarEqualizer: Creating host builder...
+[2025-08-04 21:19:19] TaskbarEqualizer: Building host...
+[2025-08-04 21:19:19] TaskbarEqualizer: Configuring services...
+[2025-08-04 21:19:19] TaskbarEqualizer: Adding CoreAudioServices...
+[2025-08-04 21:19:19] TaskbarEqualizer: Adding SystemTrayServices...
+[2025-08-04 21:19:19] TaskbarEqualizer: Adding Phase3Services...
+[2025-08-04 21:19:19] TaskbarEqualizer: Host built successfully
+[2025-08-04 21:19:19] TaskbarEqualizer: Getting required services...
+[2025-08-04 21:19:19] TaskbarEqualizer: Logger service obtained
+[2025-08-04 21:19:19] TaskbarEqualizer: SystemTray service obtained
+[2025-08-04 21:19:19] TaskbarEqualizer: === CRITICAL ERROR ===
+Exception: System.InvalidOperationException: No service for type 'TaskbarEqualizer.Configuration.Services.ApplicationOrchestrator' has been registered.
+   at Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions.GetRequiredService(IServiceProvider provider, Type serviceType)
+   at Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions.GetRequiredService[T](IServiceProvider provider)
+   at TaskbarEqualizer.Main.Program.Main(String[] args) in J:\Graphlight\TaskbarEqualizer\src\TaskbarEqualizer.Main\Program.cs:line 128
+[2025-08-04 21:19:19] TaskbarEqualizer: Error logged to Windows Event Log
+[2025-08-04 21:19:19] TaskbarEqualizer: === APPLICATION EXITING WITH ERROR CODE 1 ===

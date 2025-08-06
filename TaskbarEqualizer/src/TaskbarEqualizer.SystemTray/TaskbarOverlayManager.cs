@@ -202,7 +202,7 @@ namespace TaskbarEqualizer.SystemTray
 
         private void StartUpdateTimer()
         {
-            var interval = 1000 / _configuration.UpdateFrequency;
+            var interval = Math.Max(16, 1000 / _configuration.UpdateFrequency); // Minimum 16ms for 60fps
             _updateTimer = new System.Threading.Timer(OnUpdateTimerTick, null, 0, interval);
         }
 
@@ -304,6 +304,12 @@ namespace TaskbarEqualizer.SystemTray
         private readonly IIconRenderer _iconRenderer;
         private OverlayConfiguration _configuration;
         private SpectrumDataEventArgs? _currentSpectrum;
+        private float[] _smoothedSpectrum = new float[32];
+        private float[] _peakHolds = new float[32];
+        private DateTime[] _lastPeakTimes = new DateTime[32];
+        private DateTime _lastAudioTime = DateTime.Now;
+        private readonly float _decayRate = 0.92f; // How fast bars fall down
+        private readonly float _smoothingFactor = 0.4f; // Less smoothing for more responsiveness
 
         public OverlayWindow(ILogger logger, IIconRenderer iconRenderer, OverlayConfiguration configuration)
         {
@@ -316,11 +322,11 @@ namespace TaskbarEqualizer.SystemTray
 
         private void SetupWindow()
         {
-            // Make window transparent and always on top
+            // Make window transparent and always on top but NOT click-through to avoid suspension appearance
             FormBorderStyle = FormBorderStyle.None;
             WindowState = FormWindowState.Normal;
             TopMost = true;
-            ShowInTaskbar = false;
+            ShowInTaskbar = true; // Show in taskbar so it's clearly visible and active
             ControlBox = false;
             MaximizeBox = false;
             MinimizeBox = false;
@@ -332,14 +338,14 @@ namespace TaskbarEqualizer.SystemTray
                      ControlStyles.DoubleBuffer | 
                      ControlStyles.ResizeRedraw, true);
 
-            // Set transparency
-            BackColor = Color.Magenta;
-            TransparencyKey = Color.Magenta;
-            Opacity = _configuration.Opacity;
+            // Set transparency but with a less transparent background
+            BackColor = Color.FromArgb(20, 20, 20); // Dark background instead of transparent
+            Opacity = Math.Max(0.8, _configuration.Opacity); // More opaque to be clearly visible
 
-            // Make window click-through
+            // Make window layered but NOT click-through - this prevents the suspension appearance
             var exStyle = NativeMethods.GetWindowLong(Handle, NativeMethods.GWL_EXSTYLE);
-            exStyle |= NativeMethods.WS_EX_LAYERED | NativeMethods.WS_EX_TRANSPARENT;
+            exStyle |= NativeMethods.WS_EX_LAYERED;
+            // Removed WS_EX_TRANSPARENT to prevent suspension appearance
             NativeMethods.SetWindowLong(Handle, NativeMethods.GWL_EXSTYLE, exStyle);
         }
 
@@ -361,6 +367,38 @@ namespace TaskbarEqualizer.SystemTray
         public void UpdateVisualization(SpectrumDataEventArgs spectrumData)
         {
             _currentSpectrum = spectrumData;
+            _lastAudioTime = DateTime.Now;
+            
+            // Process spectrum data for better responsiveness and decay
+            if (spectrumData.Spectrum != null)
+            {
+                var now = DateTime.Now;
+                var targetLength = Math.Min(_smoothedSpectrum.Length, spectrumData.Spectrum.Length);
+                
+                for (int i = 0; i < targetLength; i++)
+                {
+                    var newValue = (float)spectrumData.Spectrum[i];
+                    
+                    // Apply smoothing for responsiveness
+                    _smoothedSpectrum[i] = _smoothedSpectrum[i] * _smoothingFactor + 
+                                          newValue * (1f - _smoothingFactor);
+                    
+                    // Peak hold logic
+                    if (_smoothedSpectrum[i] > _peakHolds[i])
+                    {
+                        _peakHolds[i] = _smoothedSpectrum[i];
+                        _lastPeakTimes[i] = now;
+                    }
+                    else
+                    {
+                        // Decay peak holds after 1 second
+                        if ((now - _lastPeakTimes[i]).TotalMilliseconds > 1000)
+                        {
+                            _peakHolds[i] *= 0.95f;
+                        }
+                    }
+                }
+            }
             
             // Trigger repaint on UI thread
             if (InvokeRequired)
@@ -375,16 +413,33 @@ namespace TaskbarEqualizer.SystemTray
 
         protected override void OnPaint(PaintEventArgs e)
         {
-            if (_currentSpectrum == null)
-                return;
-
             try
             {
+                // Apply decay when no recent audio
+                var timeSinceLastAudio = (DateTime.Now - _lastAudioTime).TotalMilliseconds;
+                if (timeSinceLastAudio > 100) // 100ms grace period
+                {
+                    for (int i = 0; i < _smoothedSpectrum.Length; i++)
+                    {
+                        _smoothedSpectrum[i] *= _decayRate;
+                        _peakHolds[i] *= 0.98f; // Slower decay for peaks
+                    }
+                }
+                
                 // Render visualization directly to the overlay window
-                using var bitmap = RenderVisualization(_currentSpectrum, ClientSize);
+                using var bitmap = RenderVisualization(ClientSize);
                 if (bitmap != null)
                 {
                     e.Graphics.DrawImage(bitmap, 0, 0);
+                }
+                
+                // Schedule next repaint for decay animation
+                if (timeSinceLastAudio < 5000) // Continue for 5 seconds after audio stops
+                {
+                    BeginInvoke(new Action(() => {
+                        System.Threading.Thread.Sleep(33); // ~30 FPS
+                        Invalidate();
+                    }));
                 }
             }
             catch (Exception ex)
@@ -393,7 +448,7 @@ namespace TaskbarEqualizer.SystemTray
             }
         }
 
-        private Bitmap? RenderVisualization(SpectrumDataEventArgs spectrum, Size size)
+        private Bitmap? RenderVisualization(Size size)
         {
             try
             {
@@ -407,8 +462,8 @@ namespace TaskbarEqualizer.SystemTray
                 // Clear background
                 graphics.Clear(Color.Transparent);
 
-                // Render equalizer bars
-                RenderEqualizerBars(graphics, spectrum, size);
+                // Render equalizer bars using smoothed data
+                RenderEqualizerBars(graphics, size);
 
                 return bitmap;
             }
@@ -419,25 +474,42 @@ namespace TaskbarEqualizer.SystemTray
             }
         }
 
-        private void RenderEqualizerBars(Graphics graphics, SpectrumDataEventArgs spectrum, Size size)
+        private void RenderEqualizerBars(Graphics graphics, Size size)
         {
-            if (spectrum.Spectrum == null || spectrum.Spectrum.Length == 0)
-                return;
-
-            var barCount = Math.Min(spectrum.Spectrum.Length, 32); // Limit to 32 bars for taskbar
+            var barCount = _smoothedSpectrum.Length;
             var barWidth = (float)size.Width / barCount;
             var maxHeight = size.Height - 4; // Leave 2px margin top and bottom
 
-            using var brush = new SolidBrush(_configuration.RenderConfiguration.ColorScheme.PrimaryColor);
+            // Create gradient brush from green to red
+            using var gradientBrush = new LinearGradientBrush(
+                new Rectangle(0, 0, size.Width, size.Height),
+                Color.FromArgb(0, 255, 100),    // Green at bottom
+                Color.FromArgb(255, 100, 0),    // Red at top
+                LinearGradientMode.Vertical);
 
             for (int i = 0; i < barCount; i++)
             {
-                var level = spectrum.Spectrum[i];
+                var level = Math.Max(0, Math.Min(1, _smoothedSpectrum[i]));
                 var barHeight = Math.Max(1, (int)(level * maxHeight));
                 var x = i * barWidth;
                 var y = size.Height - barHeight - 2;
+                var width = Math.Max(1, barWidth - 1);
 
-                graphics.FillRectangle(brush, x, y, barWidth - 1, barHeight);
+                // Draw main bar
+                if (barHeight > 1)
+                {
+                    graphics.FillRectangle(gradientBrush, x, y, width, barHeight);
+                }
+
+                // Draw peak hold line
+                var peakLevel = Math.Max(0, Math.Min(1, _peakHolds[i]));
+                if (peakLevel > 0.1f)
+                {
+                    var peakHeight = (int)(peakLevel * maxHeight);
+                    var peakY = size.Height - peakHeight - 2;
+                    using var peakPen = new Pen(Color.White, 1);
+                    graphics.DrawLine(peakPen, x, peakY, x + width, peakY);
+                }
             }
         }
 
@@ -467,8 +539,9 @@ namespace TaskbarEqualizer.SystemTray
             get
             {
                 var cp = base.CreateParams;
-                // Make window layered and transparent to clicks
-                cp.ExStyle |= NativeMethods.WS_EX_LAYERED | NativeMethods.WS_EX_TRANSPARENT;
+                // Make window layered but NOT transparent to clicks to avoid suspension appearance
+                cp.ExStyle |= NativeMethods.WS_EX_LAYERED;
+                // Removed WS_EX_TRANSPARENT to prevent suspension appearance
                 return cp;
             }
         }

@@ -17,7 +17,7 @@ namespace TaskbarEqualizer.Core.Audio
     {
         private readonly ILogger<FrequencyAnalyzer> _logger;
         private readonly SpectrumDataPool _spectrumPool;
-        private readonly AudioSamplePool _samplePool;
+        private AudioSamplePool _samplePool;
         private readonly LockFreeQueue<AudioProcessingItem> _processingQueue;
         
         private FrequencyAnalysisConfiguration _config;
@@ -60,12 +60,14 @@ namespace TaskbarEqualizer.Core.Audio
             
             // Create object pools for memory optimization
             _spectrumPool = PoolFactory.CreateSpectrumDataPool(_config.FrequencyBands);
-            _samplePool = PoolFactory.CreateAudioSamplePool(44100, 23.0); // Default for 1024 samples
+            // Use max buffer size to handle variable audio capture sizes, but ensure it's at least FFT size
+            int maxBufferSize = Math.Max(_config.FftSize, 2048); 
+            _samplePool = PoolFactory.CreateAudioSamplePoolForFft(maxBufferSize);
             
             // Create processing queue for thread-safe audio data handling
             _processingQueue = LockFreeQueueFactory.CreateForAudioProcessing<AudioProcessingItem>(50.0, 44100);
             
-            _logger.LogDebug("FrequencyAnalyzer initialized with default configuration");
+            _logger.LogDebug("FrequencyAnalyzer initialized with sample pool size: {MaxBufferSize} (FFT: {FftSize})", maxBufferSize, _config.FftSize);
         }
 
         #region Events
@@ -116,11 +118,23 @@ namespace TaskbarEqualizer.Core.Audio
 
             lock (_configLock)
             {
+                // Check if FFT size is changing - need to recreate sample pool
+                bool fftSizeChanged = _config.FftSize != fftSize;
+                
                 _config.FftSize = fftSize;
                 _config.FrequencyBands = frequencyBands;
                 _config.SmoothingFactor = smoothingFactor;
                 SampleRate = sampleRate;
                 _configurationDirty = true;
+                
+                // Recreate sample pool if FFT size changed
+                if (fftSizeChanged)
+                {
+                    _samplePool?.Dispose();
+                    int maxBufferSize = Math.Max(_config.FftSize, 2048);
+                    _samplePool = PoolFactory.CreateAudioSamplePoolForFft(maxBufferSize);
+                    _logger.LogDebug("Recreated sample pool for new FFT size: {FftSize} (max buffer: {MaxBufferSize})", _config.FftSize, maxBufferSize);
+                }
             }
 
             await Task.Run(() => InitializeProcessingBuffers(), cancellationToken);
@@ -150,6 +164,9 @@ namespace TaskbarEqualizer.Core.Audio
                 SampleCount = Math.Min(sampleCount, _config.FftSize),
                 TimestampTicks = timestampTicks
             };
+            
+            _logger.LogDebug("Processing audio sample: count={SampleCount}, timestamp={Timestamp}", 
+                processingItem.SampleCount, timestampTicks);
 
             // Copy samples to our internal buffer
             Array.Copy(samples, 0, processingItem.Samples, 0, processingItem.SampleCount);
@@ -495,12 +512,20 @@ namespace TaskbarEqualizer.Core.Audio
 
                 // Get spectrum array from pool and copy data
                 var spectrum = _spectrumPool.Get();
+                if (spectrum == null)
+                {
+                    _logger.LogWarning("Failed to get spectrum buffer from pool");
+                    return;
+                }
+                
                 Array.Copy(_currentSpectrum!, spectrum, Math.Min(_currentSpectrum!.Length, spectrum.Length));
 
                 // Calculate processing latency
                 var processingLatency = TimeSpan.FromMilliseconds(Environment.TickCount64 - startTime);
 
                 // Fire event
+                _logger.LogDebug("Firing spectrum event: peak={Peak:F3}, rms={Rms:F3}, bands={Bands}", 
+                    peakValue, rmsLevel, spectrum.Length);
                 SpectrumDataAvailable?.Invoke(this, new SpectrumDataEventArgs(
                     spectrum, _config.FrequencyBands, peakValue, peakBandIndex, 
                     item.TimestampTicks, processingLatency, rmsLevel));

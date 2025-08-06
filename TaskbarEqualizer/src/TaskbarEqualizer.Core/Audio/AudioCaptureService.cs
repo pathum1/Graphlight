@@ -40,7 +40,10 @@ namespace TaskbarEqualizer.Core.Audio
         {
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _deviceEnumerator = new MMDeviceEnumerator();
-            _samplePool = PoolFactory.CreateAudioSamplePool(44100, 23.0); // ~1024 samples at 44.1kHz
+            // Use a buffer size that can handle larger audio capture scenarios
+            // Calculate max expected buffer size: NextPowerOfTwo of 44100 * 23ms = 2048
+            int maxExpectedBufferSize = 2048; // Power of 2, handles up to ~46ms at 44.1kHz
+            _samplePool = PoolFactory.CreateAudioSamplePoolForFft(maxExpectedBufferSize);
             _lastTimestamp = Environment.TickCount64;
             
             _logger.LogDebug("AudioCaptureService initialized");

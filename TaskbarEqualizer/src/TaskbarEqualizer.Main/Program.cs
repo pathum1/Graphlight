@@ -6,6 +6,9 @@ using System.Windows.Forms;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Configuration;
+using Serilog;
+using Serilog.Events;
 using TaskbarEqualizer.Core.DependencyInjection;
 using TaskbarEqualizer.SystemTray.DependencyInjection;
 using TaskbarEqualizer.Configuration.DependencyInjection;
@@ -73,7 +76,33 @@ namespace TaskbarEqualizer.Main
 
                 // Create host builder with all services - REMOVED UseWindowsService()
                 EmergencyLog("Creating host builder...");
+                
+                // Configure Serilog for file logging
+                var logPath = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                    "TaskbarEqualizer", "logs", "TaskbarEqualizer.log");
+                
+                Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
+                
+                Log.Logger = new LoggerConfiguration()
+                    .MinimumLevel.Debug()
+                    .MinimumLevel.Override("Microsoft", LogEventLevel.Warning)
+                    .MinimumLevel.Override("System", LogEventLevel.Warning)
+                    .MinimumLevel.Override("TaskbarEqualizer", LogEventLevel.Debug)
+                    .Enrich.FromLogContext()
+                    .WriteTo.Console(
+                        outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}")
+                    .WriteTo.File(
+                        logPath,
+                        rollingInterval: RollingInterval.Day,
+                        retainedFileCountLimit: 7,
+                        fileSizeLimitBytes: 10 * 1024 * 1024, // 10MB
+                        outputTemplate: "[{Timestamp:yyyy-MM-dd HH:mm:ss} {Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}",
+                        shared: true)
+                    .CreateLogger();
+
                 var hostBuilder = Host.CreateDefaultBuilder(args)
+                    .UseSerilog()
                     .ConfigureServices((context, services) =>
                     {
                         EmergencyLog("Configuring services...");
@@ -90,27 +119,6 @@ namespace TaskbarEqualizer.Main
                         {
                             // TODO: Configure portable mode settings
                             // This will be handled by the settings manager
-                        }
-                    })
-                    .ConfigureLogging(logging =>
-                    {
-                        logging.ClearProviders();
-                        
-                        // Always add console logging for debugging
-                        logging.AddConsole();
-                        
-                        // Add file logging for production
-                        logging.AddFilter("TaskbarEqualizer", LogLevel.Information);
-                        logging.SetMinimumLevel(LogLevel.Debug);
-                    
-                        // Add event log for production
-                        try 
-                        {
-                            logging.AddEventLog();
-                        }
-                        catch 
-                        {
-                            // Event log might not be available
                         }
                     });
 
@@ -138,6 +146,9 @@ namespace TaskbarEqualizer.Main
                 {
                     EmergencyLog($"ContextMenu service FAILED: {ex.Message}");
                 }
+
+                // No main window - using floating taskbar overlay only
+                EmergencyLog("Using floating taskbar overlay for spectrum visualization");
 
                 // Log startup
                 logger.LogInformation("TaskbarEqualizer starting...");
@@ -242,6 +253,9 @@ namespace TaskbarEqualizer.Main
                     await _host.StopAsync(TimeSpan.FromSeconds(5));
                     _host.Dispose();
                 }
+                
+                // Ensure Serilog flushes any remaining logs
+                Log.CloseAndFlush();
             }
             catch
             {

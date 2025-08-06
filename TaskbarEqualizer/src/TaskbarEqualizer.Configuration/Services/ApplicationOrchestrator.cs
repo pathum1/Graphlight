@@ -26,6 +26,7 @@ namespace TaskbarEqualizer.Configuration.Services
 
         private bool _isInitialized;
         private bool _disposed;
+        private object? _mainWindow; // Will be set from the main program
 
         /// <summary>
         /// Initializes a new instance of the ApplicationOrchestrator.
@@ -80,6 +81,15 @@ namespace TaskbarEqualizer.Configuration.Services
         /// Gets a value indicating whether the orchestrator has been fully initialized.
         /// </summary>
         public bool IsInitialized => _isInitialized;
+
+        /// <summary>
+        /// Sets the main window reference for spectrum updates.
+        /// </summary>
+        /// <param name="mainWindow">The main spectrum analyzer window.</param>
+        public void SetMainWindow(object mainWindow)
+        {
+            _mainWindow = mainWindow;
+        }
 
         #endregion
 
@@ -199,9 +209,9 @@ namespace TaskbarEqualizer.Configuration.Services
             {
                 Enabled = true,
                 Position = OverlayPosition.Center,
-                Width = 300,
-                Height = 40,
-                Opacity = 0.8f,
+                Width = 600, // Make it wider for better visibility
+                Height = 80, // Make it taller for better visibility
+                Opacity = 0.9f, // More opaque
                 UpdateFrequency = 60
             };
             
@@ -211,16 +221,19 @@ namespace TaskbarEqualizer.Configuration.Services
             // 5. Setup audio processing pipeline
             SetupAudioProcessingPipeline();
 
-            // 6. Start audio capture and analysis
+            // 6. Setup event handlers for UI interactions
+            SetupEventHandlers();
+
+            // 7. Start audio capture and analysis
             await _frequencyAnalyzer.StartAnalysisAsync(cancellationToken);
             await _audioCaptureService.StartCaptureAsync(cancellationToken);
             _logger.LogDebug("Audio capture and analysis started");
 
-            // 7. Show taskbar overlay
+            // 8. Show taskbar overlay
             await _taskbarOverlayManager.ShowAsync(cancellationToken);
             _logger.LogDebug("Taskbar overlay shown");
 
-            // 8. Check auto-start status
+            // 9. Check auto-start status
             var autoStartEnabled = await _autoStartManager.IsAutoStartEnabledAsync(cancellationToken);
             _logger.LogDebug("Auto-start status checked: {Enabled}", autoStartEnabled);
 
@@ -259,17 +272,30 @@ namespace TaskbarEqualizer.Configuration.Services
         }
 
         /// <summary>
-        /// Handles spectrum data from the frequency analyzer and forwards to taskbar overlay.
+        /// Handles spectrum data from the frequency analyzer and forwards to taskbar overlay and main window.
         /// </summary>
         private void OnSpectrumDataAvailable(object? sender, SpectrumDataEventArgs e)
         {
             try
             {
+                // Reduce logging frequency for performance - only log significant changes
+                var shouldLog = _logger.IsEnabled(Microsoft.Extensions.Logging.LogLevel.Trace) || 
+                               (e.PeakValue > 0.1 && DateTime.Now.Millisecond % 500 < 50);
+                
+                if (shouldLog)
+                {
+                    _logger.LogDebug("Received spectrum data: peak={Peak:F3}, rms={Rms:F3}, bands={Bands}", 
+                        e.PeakValue, e.RmsLevel, e.Spectrum?.Length ?? 0);
+                }
+                
+                // Update taskbar overlay
                 _taskbarOverlayManager.UpdateVisualization(e);
+                
+                // Only using taskbar overlay - no main window
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Error updating taskbar visualization");
+                _logger.LogWarning(ex, "Error updating visualizations");
             }
         }
 

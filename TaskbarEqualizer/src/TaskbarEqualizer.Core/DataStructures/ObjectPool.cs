@@ -303,6 +303,22 @@ namespace TaskbarEqualizer.Core.DataStructures
         }
 
         /// <summary>
+        /// Creates an audio sample pool sized to match FFT requirements.
+        /// Ensures sample buffers can accommodate the maximum FFT size.
+        /// </summary>
+        /// <param name="fftSize">FFT size in samples.</param>
+        /// <param name="channelCount">Number of audio channels.</param>
+        /// <returns>Audio sample pool with FFT-sized buffers.</returns>
+        public static AudioSamplePool CreateAudioSamplePoolForFft(int fftSize, int channelCount = 1)
+        {
+            int sampleSize = fftSize * channelCount;
+            int poolSize = 50; // Sufficient pool size for real-time processing
+            int preloadCount = 10;
+
+            return new AudioSamplePool(sampleSize, poolSize, preloadCount);
+        }
+
+        /// <summary>
         /// Creates a spectrum data pool optimized for the specified frequency band count.
         /// </summary>
         /// <param name="bandCount">Number of frequency bands.</param>

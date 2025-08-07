@@ -78,6 +78,14 @@ namespace TaskbarEqualizer.Core.Interfaces
         /// </summary>
         /// <returns>Array of available audio devices.</returns>
         MMDevice[] GetAvailableDevices();
+
+        /// <summary>
+        /// Attempts to find and start loopback capture on the best available device for audio visualization.
+        /// This method tries multiple strategies to ensure we capture actual system audio playback.
+        /// </summary>
+        /// <param name="cancellationToken">Cancellation token for the operation.</param>
+        /// <returns>Task representing the asynchronous operation.</returns>
+        Task StartBestLoopbackCaptureAsync(CancellationToken cancellationToken = default);
     }
 
     /// <summary>

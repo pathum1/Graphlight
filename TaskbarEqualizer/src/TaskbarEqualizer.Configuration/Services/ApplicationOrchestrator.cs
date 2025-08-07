@@ -197,10 +197,10 @@ namespace TaskbarEqualizer.Configuration.Services
 
             // 3. Initialize frequency analyzer
             await _frequencyAnalyzer.ConfigureAsync(
-                fftSize: 2048, // Increased to handle stereo audio (2 channels)
+                fftSize: 2048,
                 sampleRate: 44100,
                 frequencyBands: 32,
-                smoothingFactor: 0.8,
+                smoothingFactor: 0.3, // Changed from 0.8 to 0.3 for better responsiveness
                 cancellationToken);
             _logger.LogDebug("Frequency analyzer configured");
 
@@ -209,8 +209,8 @@ namespace TaskbarEqualizer.Configuration.Services
             {
                 Enabled = true,
                 Position = OverlayPosition.Center,
-                Width = 600, // Make it wider for better visibility
-                Height = 80, // Make it taller for better visibility
+                Width = 500, // Reduced from 600 for better fit
+                Height = 80, // Good height for visibility
                 Opacity = 0.9f, // More opaque
                 UpdateFrequency = 60
             };
@@ -224,16 +224,20 @@ namespace TaskbarEqualizer.Configuration.Services
             // 6. Setup event handlers for UI interactions
             SetupEventHandlers();
 
-            // 7. Start audio capture and analysis
+            // 7. Enumerate and log available audio devices for debugging
+            var availableDevices = _audioCaptureService.GetAvailableDevices();
+            _logger.LogInformation("Found {DeviceCount} render devices for loopback capture", availableDevices.Length);
+            
+            // 8. Start audio capture and analysis with best device selection
             await _frequencyAnalyzer.StartAnalysisAsync(cancellationToken);
-            await _audioCaptureService.StartCaptureAsync(cancellationToken);
+            await _audioCaptureService.StartBestLoopbackCaptureAsync(cancellationToken);
             _logger.LogDebug("Audio capture and analysis started");
 
-            // 8. Show taskbar overlay
+            // 9. Show taskbar overlay
             await _taskbarOverlayManager.ShowAsync(cancellationToken);
             _logger.LogDebug("Taskbar overlay shown");
 
-            // 9. Check auto-start status
+            // 10. Check auto-start status
             var autoStartEnabled = await _autoStartManager.IsAutoStartEnabledAsync(cancellationToken);
             _logger.LogDebug("Auto-start status checked: {Enabled}", autoStartEnabled);
 

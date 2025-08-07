@@ -37,6 +37,12 @@ namespace TaskbarEqualizer.Core.Audio
         private DateTime _lastErrorTime = DateTime.MinValue;
         private const int MAX_CONSECUTIVE_ERRORS = 10;
         private static readonly TimeSpan ERROR_RESET_INTERVAL = TimeSpan.FromSeconds(30);
+        
+        // Audio level monitoring
+        private DateTime _lastAudioLevelLog = DateTime.MinValue;
+        private float _maxPeakSinceLastLog = 0f;
+        private float _maxRmsSinceLastLog = 0f;
+        private static readonly TimeSpan AUDIO_LEVEL_LOG_INTERVAL = TimeSpan.FromSeconds(5);
 
         /// <summary>
         /// Initializes a new instance of the AudioCaptureService.
@@ -114,11 +120,34 @@ namespace TaskbarEqualizer.Core.Audio
 
                 try
                 {
-                    _logger.LogInformation("Starting audio capture on device: {DeviceName}", device.FriendlyName);
+                    _logger.LogInformation("Starting WASAPI loopback capture on device: {DeviceName} [{DeviceId}]", 
+                        device.FriendlyName, device.ID);
+
+                    // Log device properties for debugging
+                    try
+                    {
+                        _logger.LogDebug("Device state: {State}, DataFlow: {DataFlow}", 
+                            device.State, device.DataFlow);
+                        
+                        // Check if device is the current default multimedia device
+                        var defaultMultimedia = _deviceEnumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
+                        var defaultConsole = _deviceEnumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Console);
+                        
+                        _logger.LogDebug("Device is default multimedia: {IsDefaultMM}, default console: {IsDefaultConsole}",
+                            device.ID == defaultMultimedia?.ID,
+                            device.ID == defaultConsole?.ID);
+                    }
+                    catch (Exception logEx)
+                    {
+                        _logger.LogWarning(logEx, "Failed to log device properties");
+                    }
 
                     // Initialize WASAPI loopback capture
                     _capture = new WasapiLoopbackCapture(device);
                     _currentDevice = device;
+                    
+                    // Log the audio format we'll be capturing
+                    _logger.LogInformation("Audio format for loopback capture: {Format}", _capture.WaveFormat);
                     
                     // Calculate optimal buffer size based on device capabilities
                     CalculateOptimalBufferSize(_capture.WaveFormat);
@@ -269,14 +298,96 @@ namespace TaskbarEqualizer.Core.Audio
                     deviceArray[i] = devices[i];
                 }
                 
-                _logger.LogDebug("Found {DeviceCount} available audio devices", deviceArray.Length);
+                _logger.LogDebug("Found {DeviceCount} available render devices for loopback capture:", deviceArray.Length);
+                
+                // Log each available device for debugging
+                for (int i = 0; i < deviceArray.Length; i++)
+                {
+                    var device = deviceArray[i];
+                    try
+                    {
+                        _logger.LogDebug("  Device {Index}: {Name} [{Id}] - State: {State}", 
+                            i, device.FriendlyName, device.ID, device.State);
+                    }
+                    catch (Exception deviceEx)
+                    {
+                        _logger.LogWarning(deviceEx, "  Device {Index}: Error getting device info", i);
+                    }
+                }
+                
                 return deviceArray;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error enumerating audio devices");
+                _logger.LogError(ex, "Error enumerating audio render devices");
                 return Array.Empty<MMDevice>();
             }
+        }
+
+        /// <summary>
+        /// Attempts to find and start loopback capture on the best available device for audio visualization.
+        /// This method tries multiple strategies to ensure we capture actual system audio playback.
+        /// </summary>
+        /// <param name="cancellationToken">Cancellation token for the operation.</param>
+        /// <returns>Task representing the asynchronous operation.</returns>
+        public async Task StartBestLoopbackCaptureAsync(CancellationToken cancellationToken = default)
+        {
+            if (_disposed)
+                throw new ObjectDisposedException(nameof(AudioCaptureService));
+
+            _logger.LogInformation("Attempting to find best device for WASAPI loopback capture");
+
+            // Strategy 1: Try default multimedia device
+            try
+            {
+                var multimediaDevice = _deviceEnumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
+                _logger.LogDebug("Trying default multimedia device: {DeviceName}", multimediaDevice.FriendlyName);
+                
+                await StartCaptureAsync(multimediaDevice, cancellationToken);
+                _logger.LogInformation("Successfully started loopback capture on multimedia device: {DeviceName}", multimediaDevice.FriendlyName);
+                return;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to start capture on default multimedia device");
+            }
+
+            // Strategy 2: Try default console device
+            try
+            {
+                var consoleDevice = _deviceEnumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Console);
+                _logger.LogDebug("Trying default console device: {DeviceName}", consoleDevice.FriendlyName);
+                
+                await StartCaptureAsync(consoleDevice, cancellationToken);
+                _logger.LogInformation("Successfully started loopback capture on console device: {DeviceName}", consoleDevice.FriendlyName);
+                return;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to start capture on default console device");
+            }
+
+            // Strategy 3: Try all available active render devices
+            var devices = GetAvailableDevices();
+            for (int i = 0; i < devices.Length; i++)
+            {
+                try
+                {
+                    var device = devices[i];
+                    _logger.LogDebug("Trying device {Index}: {DeviceName}", i, device.FriendlyName);
+                    
+                    await StartCaptureAsync(device, cancellationToken);
+                    _logger.LogInformation("Successfully started loopback capture on device: {DeviceName}", device.FriendlyName);
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to start capture on device {Index}: {DeviceName}", 
+                        i, devices[i].FriendlyName);
+                }
+            }
+
+            throw new InvalidOperationException("Failed to start WASAPI loopback capture on any available render device");
         }
 
         #endregion
@@ -287,11 +398,46 @@ namespace TaskbarEqualizer.Core.Audio
         {
             try
             {
-                return _deviceEnumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Console);
+                // Log all available render devices for debugging
+                LogAvailableRenderDevices();
+                
+                // For audio visualization, we want the multimedia playback device (what plays music/videos)
+                // Try multimedia role first, then console as fallback
+                try
+                {
+                    var multimediaDevice = _deviceEnumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
+                    _logger.LogDebug("Using multimedia render device: {DeviceName}", multimediaDevice.FriendlyName);
+                    return multimediaDevice;
+                }
+                catch (Exception mmEx)
+                {
+                    _logger.LogWarning(mmEx, "Failed to get multimedia render device, trying console role");
+                    
+                    var consoleDevice = _deviceEnumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Console);
+                    _logger.LogDebug("Using console render device: {DeviceName}", consoleDevice.FriendlyName);
+                    return consoleDevice;
+                }
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to get default audio device");
+                _logger.LogError(ex, "Failed to get any default audio render device");
+                
+                // Last resort: try to get any active render device
+                try
+                {
+                    var devices = _deviceEnumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active);
+                    if (devices.Count > 0)
+                    {
+                        var fallbackDevice = devices[0];
+                        _logger.LogWarning("Using fallback render device: {DeviceName}", fallbackDevice.FriendlyName);
+                        return fallbackDevice;
+                    }
+                }
+                catch (Exception fallbackEx)
+                {
+                    _logger.LogError(fallbackEx, "Failed to get fallback render device");
+                }
+                
                 return null;
             }
         }
@@ -379,6 +525,13 @@ namespace TaskbarEqualizer.Core.Audio
                 var sampleCount = format.Channels == 2 ? totalSamples / 2 : totalSamples; // Mono output for FFT
                 var samples = _samplePool.Get();
                 
+                // Debug logging for first few data packets to verify we're getting audio
+                if (DateTime.Now.Millisecond % 1000 < 50) // Log roughly once per second
+                {
+                    _logger.LogDebug("WASAPI loopback data: {BytesRecorded} bytes, {TotalSamples} samples, {SampleCount} output samples, Format: {Format}", 
+                        e.BytesRecorded, totalSamples, sampleCount, format);
+                }
+                
                 try
                 {
                     // Ensure we have enough space in the pooled array
@@ -414,6 +567,37 @@ namespace TaskbarEqualizer.Core.Audio
                         return;
                     }
 
+                    // Calculate RMS for debugging - check if we're getting actual audio
+                    double rms = 0.0;
+                    for (int i = 0; i < sampleCount; i++)
+                    {
+                        rms += samples[i] * samples[i];
+                    }
+                    rms = Math.Sqrt(rms / sampleCount);
+                    
+                    // Find peak value for debugging
+                    float peak = 0.0f;
+                    for (int i = 0; i < sampleCount; i++)
+                    {
+                        float abs = Math.Abs(samples[i]);
+                        if (abs > peak) peak = abs;
+                    }
+                    
+                    // Log audio levels occasionally for debugging
+                    if (DateTime.Now.Millisecond % 2000 < 50) // Log every 2 seconds
+                    {
+                        _logger.LogDebug("Audio levels - RMS: {Rms:F6}, Peak: {Peak:F6}, Device: {DeviceName}", 
+                            rms, peak, _currentDevice?.FriendlyName ?? "Unknown");
+                        
+                        if (rms < 0.000001 && peak < 0.000001)
+                        {
+                            _logger.LogWarning("Very low audio levels detected - may not be capturing system audio playback correctly");
+                        }
+                    }
+
+                    // Monitor audio levels for debugging
+                    MonitorAudioLevels(samples, sampleCount);
+                    
                     // Fire event with converted samples
                     AudioDataAvailable?.Invoke(this, new AudioDataEventArgs(samples, sampleCount, format, timestamp));
                 }
@@ -595,6 +779,103 @@ namespace TaskbarEqualizer.Core.Audio
                         samplesPtr[i] = floatPtr[i];
                     }
                 }
+            }
+        }
+
+        /// <summary>
+        /// Logs all available render devices for debugging device selection issues.
+        /// </summary>
+        private void LogAvailableRenderDevices()
+        {
+            try
+            {
+                _logger.LogInformation("=== Available Audio Render Devices ===");
+                var devices = _deviceEnumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active);
+                
+                for (int i = 0; i < devices.Count; i++)
+                {
+                    var device = devices[i];
+                    try
+                    {
+                        // Check which roles this device serves
+                        bool isDefaultMultimedia = false;
+                        bool isDefaultConsole = false;
+                        
+                        try
+                        {
+                            var defaultMM = _deviceEnumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
+                            isDefaultMultimedia = device.ID == defaultMM?.ID;
+                        }
+                        catch { }
+                        
+                        try
+                        {
+                            var defaultConsole = _deviceEnumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Console);
+                            isDefaultConsole = device.ID == defaultConsole?.ID;
+                        }
+                        catch { }
+                        
+                        _logger.LogInformation("  [{Index}] {Name} - State: {State}, DefaultMM: {IsDefaultMM}, DefaultConsole: {IsDefaultConsole}",
+                            i, device.FriendlyName, device.State, isDefaultMultimedia, isDefaultConsole);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning("Failed to get properties for device {Index}: {Error}", i, ex.Message);
+                    }
+                }
+                _logger.LogInformation("=== End Device List ===");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to enumerate audio devices");
+            }
+        }
+
+        /// <summary>
+        /// Monitors audio levels and logs warnings if levels are too low for visualization.
+        /// </summary>
+        /// <param name="samples">Audio samples to analyze</param>
+        /// <param name="sampleCount">Number of samples</param>
+        private void MonitorAudioLevels(float[] samples, int sampleCount)
+        {
+            // Calculate peak and RMS levels for this buffer
+            float peak = 0f;
+            float rmsSum = 0f;
+            
+            for (int i = 0; i < sampleCount; i++)
+            {
+                float absValue = Math.Abs(samples[i]);
+                peak = Math.Max(peak, absValue);
+                rmsSum += samples[i] * samples[i];
+            }
+            
+            float rms = (float)Math.Sqrt(rmsSum / sampleCount);
+            
+            // Track maximum levels since last log
+            _maxPeakSinceLastLog = Math.Max(_maxPeakSinceLastLog, peak);
+            _maxRmsSinceLastLog = Math.Max(_maxRmsSinceLastLog, rms);
+            
+            // Log audio levels periodically
+            var now = DateTime.Now;
+            if (now - _lastAudioLevelLog >= AUDIO_LEVEL_LOG_INTERVAL)
+            {
+                _logger.LogInformation("Audio levels - Peak: {Peak:F4}, RMS: {Rms:F4} (max since last: Peak={MaxPeak:F4}, RMS={MaxRms:F4})",
+                    peak, rms, _maxPeakSinceLastLog, _maxRmsSinceLastLog);
+                
+                // Warn if levels are consistently very low
+                if (_maxPeakSinceLastLog < 0.001f && _maxRmsSinceLastLog < 0.0005f)
+                {
+                    _logger.LogWarning("Audio levels are extremely low - check that system audio is playing and device is correct");
+                    _logger.LogInformation("Try playing music/video and ensure TaskbarEqualizer has permission to access audio");
+                }
+                else if (_maxPeakSinceLastLog < 0.01f)
+                {
+                    _logger.LogDebug("Audio levels are low but detectable - visualization may be subtle");
+                }
+                
+                _lastAudioLevelLog = now;
+                _maxPeakSinceLastLog = 0f;
+                _maxRmsSinceLastLog = 0f;
             }
         }
 

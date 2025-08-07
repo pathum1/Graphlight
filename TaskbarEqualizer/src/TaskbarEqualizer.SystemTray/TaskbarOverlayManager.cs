@@ -325,15 +325,29 @@ namespace TaskbarEqualizer.SystemTray
         private OverlayConfiguration _configuration;
         private SpectrumDataEventArgs? _currentSpectrum;
         private float[] _smoothedSpectrum = new float[32];
-        private float[] _peakHolds = new float[32];
-        private DateTime[] _lastPeakTimes = new DateTime[32];
         private DateTime _lastAudioTime = DateTime.Now;
-        private readonly float _decayRate = 0.85f; // Faster decay - bars fall down quicker
-        private readonly float _smoothingFactor = 0.1f; // Minimal smoothing for maximum responsiveness
+        private readonly float _decayRate = 0.92f; // Changed from 0.85f - faster decay
         
-        // Dragging support
+        // Add timer for consistent updates
+        private System.Windows.Forms.Timer? _updateTimer;
+        
+        // Timer to ensure window stays on top
+        private System.Windows.Forms.Timer? _topMostTimer;
+        
+        // Dragging and resizing support
         private bool _isDragging = false;
+        private bool _isResizing = false;
+        private ResizeDirection _resizeDirection = ResizeDirection.None;
         private Point _lastMousePos;
+        private Size _originalSize;
+        
+        private enum ResizeDirection
+        {
+            None,
+            Right,
+            Bottom,
+            BottomRight
+        }
 
         public OverlayWindow(ILogger logger, IIconRenderer iconRenderer, OverlayConfiguration configuration)
         {
@@ -346,8 +360,8 @@ namespace TaskbarEqualizer.SystemTray
 
         private void SetupWindow()
         {
-            // Make window transparent and always on top
-            FormBorderStyle = FormBorderStyle.None;
+            // Make window transparent and resizable
+            FormBorderStyle = FormBorderStyle.None; // We'll handle resize manually
             WindowState = FormWindowState.Normal;
             TopMost = true;
             ShowInTaskbar = false; // Hide from taskbar to keep it as overlay only
@@ -356,6 +370,10 @@ namespace TaskbarEqualizer.SystemTray
             MinimizeBox = false;
             StartPosition = FormStartPosition.Manual;
             Visible = true; // Ensure it's visible
+            
+            // Set minimum and maximum sizes for sensible resizing
+            MinimumSize = new Size(200, 40);
+            MaximumSize = new Size(1200, 200);
 
             // Enable double buffering and mouse events
             SetStyle(ControlStyles.AllPaintingInWmPaint | 
@@ -371,14 +389,36 @@ namespace TaskbarEqualizer.SystemTray
             TransparencyKey = Color.Magenta; // Make magenta transparent
             Opacity = 1.0; // Full opacity for the bars themselves
 
-            // Make window layered but allow interaction for dragging
+            // Add timer for consistent refresh
+            _updateTimer = new System.Windows.Forms.Timer();
+            _updateTimer.Interval = 16; // 60 FPS
+            _updateTimer.Tick += (s, e) => Invalidate();
+            _updateTimer.Start();
+            
+            // Add timer to ensure window stays on top (check every 2 seconds)
+            _topMostTimer = new System.Windows.Forms.Timer();
+            _topMostTimer.Interval = 2000; // 2 seconds
+            _topMostTimer.Tick += (s, e) => EnsureTopMost();
+            _topMostTimer.Start();
+            
+            // Force window to stay on top
+            TopMost = true;
+            ShowInTaskbar = false;
+            
+            // Set extended window styles for always on top
             if (Handle != IntPtr.Zero)
             {
                 var exStyle = NativeMethods.GetWindowLong(Handle, NativeMethods.GWL_EXSTYLE);
-                exStyle |= NativeMethods.WS_EX_LAYERED | NativeMethods.WS_EX_TOPMOST;
-                // Removed WS_EX_TRANSPARENT to allow mouse interaction for dragging
+                exStyle |= NativeMethods.WS_EX_LAYERED | NativeMethods.WS_EX_TOPMOST | NativeMethods.WS_EX_TOOLWINDOW;
                 NativeMethods.SetWindowLong(Handle, NativeMethods.GWL_EXSTYLE, exStyle);
+                
+                // Force window to top
+                NativeMethods.SetWindowPos(Handle, NativeMethods.HWND_TOPMOST, 0, 0, 0, 0, 
+                    NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_SHOWWINDOW);
             }
+            
+            // Enable key preview for global shortcuts
+            KeyPreview = true;
         }
 
         public async Task InitializeAsync()
@@ -401,54 +441,31 @@ namespace TaskbarEqualizer.SystemTray
             _currentSpectrum = spectrumData;
             _lastAudioTime = DateTime.Now;
             
-            // Process spectrum data for better responsiveness and decay
             if (spectrumData.Spectrum != null)
             {
-                var now = DateTime.Now;
                 var targetLength = Math.Min(_smoothedSpectrum.Length, spectrumData.Spectrum.Length);
                 
                 for (int i = 0; i < targetLength; i++)
                 {
                     var newValue = (float)spectrumData.Spectrum[i];
+                    var currentValue = _smoothedSpectrum[i];
                     
-                    // For bars to fall properly, use immediate response for decreases
-                    if (newValue > _smoothedSpectrum[i])
+                    // Proper smoothing logic
+                    if (newValue > currentValue)
                     {
-                        // Rising: use minimal smoothing
-                        _smoothedSpectrum[i] = _smoothedSpectrum[i] * _smoothingFactor + 
-                                              newValue * (1f - _smoothingFactor);
+                        // Rising: fast attack
+                        _smoothedSpectrum[i] = currentValue + (newValue - currentValue) * 0.7f;
                     }
                     else
                     {
-                        // Falling: use immediate response with decay
-                        _smoothedSpectrum[i] = Math.Max(newValue, _smoothedSpectrum[i] * 0.8f);
+                        // Falling: smooth decay
+                        _smoothedSpectrum[i] = currentValue * 0.3f + newValue * 0.7f;
                     }
                     
-                    // Peak hold logic
-                    if (_smoothedSpectrum[i] > _peakHolds[i])
-                    {
-                        _peakHolds[i] = _smoothedSpectrum[i];
-                        _lastPeakTimes[i] = now;
-                    }
-                    else
-                    {
-                        // Decay peak holds after 500ms
-                        if ((now - _lastPeakTimes[i]).TotalMilliseconds > 500)
-                        {
-                            _peakHolds[i] *= 0.9f;
-                        }
-                    }
+                    // Force to zero when very small
+                    if (_smoothedSpectrum[i] < 0.001f)
+                        _smoothedSpectrum[i] = 0;
                 }
-            }
-            
-            // Trigger repaint on UI thread
-            if (InvokeRequired)
-            {
-                BeginInvoke(new Action(Invalidate));
-            }
-            else
-            {
-                Invalidate();
             }
         }
 
@@ -456,40 +473,16 @@ namespace TaskbarEqualizer.SystemTray
         {
             try
             {
-                // Apply continuous decay for natural falling effect
+                // Apply time-based decay when no audio
                 var timeSinceLastAudio = (DateTime.Now - _lastAudioTime).TotalMilliseconds;
-                
-                // Apply decay only when needed to prevent flickering
-                bool hasAudio = timeSinceLastAudio < 100;
-                bool hasSignificantLevel = false;
-                
-                for (int i = 0; i < _smoothedSpectrum.Length; i++)
+                if (timeSinceLastAudio > 100) // No audio for 100ms
                 {
-                    // Check if there's any significant signal
-                    if (_smoothedSpectrum[i] > 0.001f || _peakHolds[i] > 0.001f)
-                        hasSignificantLevel = true;
-                        
-                    // Only decay when there's something to decay
-                    if (_smoothedSpectrum[i] > 0.001f)
+                    for (int i = 0; i < _smoothedSpectrum.Length; i++)
                     {
-                        _smoothedSpectrum[i] = Math.Max(0, _smoothedSpectrum[i] * _decayRate);
-                        // Set to zero when very small to prevent flickering
-                        if (_smoothedSpectrum[i] < 0.001f) _smoothedSpectrum[i] = 0;
+                        _smoothedSpectrum[i] *= _decayRate;
+                        if (_smoothedSpectrum[i] < 0.001f)
+                            _smoothedSpectrum[i] = 0;
                     }
-                    
-                    // Peak decay
-                    if (_peakHolds[i] > 0.001f && timeSinceLastAudio > 50)
-                    {
-                        _peakHolds[i] = Math.Max(0, _peakHolds[i] * 0.95f);
-                        if (_peakHolds[i] < 0.001f) _peakHolds[i] = 0;
-                    }
-                }
-                
-                // Stop repainting when no significant activity
-                if (!hasAudio && !hasSignificantLevel && timeSinceLastAudio > 2000)
-                {
-                    // No need to keep repainting
-                    return;
                 }
                 
                 // Render visualization directly to the overlay window
@@ -498,15 +491,6 @@ namespace TaskbarEqualizer.SystemTray
                 {
                     e.Graphics.DrawImage(bitmap, 0, 0);
                 }
-                
-                // Schedule next repaint for smooth animation
-                BeginInvoke(new Action(async () => {
-                    await Task.Delay(16); // ~60 FPS for smooth animation
-                    if (!IsDisposed)
-                    {
-                        Invalidate();
-                    }
-                }));
             }
             catch (Exception ex)
             {
@@ -543,39 +527,81 @@ namespace TaskbarEqualizer.SystemTray
         private void RenderEqualizerBars(Graphics graphics, Size size)
         {
             var barCount = _smoothedSpectrum.Length;
-            var barWidth = (float)size.Width / barCount;
-            var maxHeight = size.Height - 4; // Leave 2px margin top and bottom
+            var availableWidth = size.Width - 4; // Leave 2px margin on each side
+            var barWidth = (float)availableWidth / barCount;
+            var maxHeight = size.Height - 8; // Leave space for drag area
+            const int resizeMargin = 8;
+            
+            // Always draw a subtle background/border to indicate draggable area
+            using (var borderPen = new Pen(Color.FromArgb(80, 255, 255, 255), 1))
+            {
+                graphics.DrawRectangle(borderPen, 0, 0, size.Width - 1, size.Height - 1);
+            }
+            
+            // Draw a subtle drag handle area at the top
+            using (var dragBrush = new SolidBrush(Color.FromArgb(40, 255, 255, 255)))
+            {
+                graphics.FillRectangle(dragBrush, 0, 0, size.Width, 4);
+            }
+
+            // Draw resize indicators
+            DrawResizeIndicators(graphics, size, resizeMargin);
 
             // Create gradient brush from green to red
             using var gradientBrush = new LinearGradientBrush(
-                new Rectangle(0, 0, size.Width, size.Height),
+                new Rectangle(2, 4, availableWidth, maxHeight),
                 Color.FromArgb(0, 255, 100),    // Green at bottom
                 Color.FromArgb(255, 100, 0),    // Red at top
                 LinearGradientMode.Vertical);
 
+            // Draw bars with proper scaling
             for (int i = 0; i < barCount; i++)
             {
                 var level = Math.Max(0, Math.Min(1, _smoothedSpectrum[i]));
-                var barHeight = Math.Max(1, (int)(level * maxHeight));
-                var x = i * barWidth;
+                var barHeight = Math.Max(0, (int)(level * maxHeight));
+                var x = 2 + i * barWidth; // Start at 2px margin
                 var y = size.Height - barHeight - 2;
-                var width = Math.Max(1, barWidth - 1);
+                var width = Math.Max(1, barWidth - 0.5f); // Small gap between bars
 
                 // Draw main bar
-                if (barHeight > 1)
+                if (barHeight > 0)
                 {
                     graphics.FillRectangle(gradientBrush, x, y, width, barHeight);
                 }
-
-                // Draw peak hold line
-                var peakLevel = Math.Max(0, Math.Min(1, _peakHolds[i]));
-                if (peakLevel > 0.1f)
-                {
-                    var peakHeight = (int)(peakLevel * maxHeight);
-                    var peakY = size.Height - peakHeight - 2;
-                    using var peakPen = new Pen(Color.White, 1);
-                    graphics.DrawLine(peakPen, x, peakY, x + width, peakY);
-                }
+            }
+            
+            // Draw small dots in the drag area to indicate it's draggable
+            using (var dotBrush = new SolidBrush(Color.FromArgb(100, 255, 255, 255)))
+            {
+                var centerX = size.Width / 2;
+                graphics.FillEllipse(dotBrush, centerX - 4, 1, 2, 2);
+                graphics.FillEllipse(dotBrush, centerX, 1, 2, 2);
+                graphics.FillEllipse(dotBrush, centerX + 4, 1, 2, 2);
+            }
+        }
+        
+        private void DrawResizeIndicators(Graphics graphics, Size size, int resizeMargin)
+        {
+            using var indicatorBrush = new SolidBrush(Color.FromArgb(60, 255, 255, 255));
+            
+            // Right edge resize indicator
+            graphics.FillRectangle(indicatorBrush, size.Width - resizeMargin, resizeMargin, resizeMargin, size.Height - resizeMargin * 2);
+            
+            // Bottom edge resize indicator
+            graphics.FillRectangle(indicatorBrush, resizeMargin, size.Height - resizeMargin, size.Width - resizeMargin * 2, resizeMargin);
+            
+            // Bottom-right corner resize indicator (stronger)
+            using var cornerBrush = new SolidBrush(Color.FromArgb(100, 255, 255, 255));
+            graphics.FillRectangle(cornerBrush, size.Width - resizeMargin, size.Height - resizeMargin, resizeMargin, resizeMargin);
+            
+            // Draw resize grip lines in the corner
+            using var gripPen = new Pen(Color.FromArgb(120, 255, 255, 255), 1);
+            for (int i = 1; i <= 3; i++)
+            {
+                int offset = i * 2;
+                graphics.DrawLine(gripPen, 
+                    size.Width - resizeMargin + offset, size.Height - 1,
+                    size.Width - 1, size.Height - resizeMargin + offset);
             }
         }
 
@@ -583,6 +609,12 @@ namespace TaskbarEqualizer.SystemTray
         {
             try
             {
+                _updateTimer?.Stop();
+                _updateTimer?.Dispose();
+                
+                _topMostTimer?.Stop();
+                _topMostTimer?.Dispose();
+                
                 if (InvokeRequired)
                 {
                     Invoke(new Action(Close));
@@ -600,25 +632,50 @@ namespace TaskbarEqualizer.SystemTray
             return ValueTask.CompletedTask;
         }
         
-        // Mouse handling for dragging
+        // Mouse handling for dragging and resizing
         protected override void OnMouseDown(MouseEventArgs e)
         {
             if (e.Button == MouseButtons.Left)
             {
-                _isDragging = true;
+                _resizeDirection = GetResizeDirection(e.Location);
+                
+                if (_resizeDirection != ResizeDirection.None)
+                {
+                    _isResizing = true;
+                    _originalSize = Size;
+                }
+                else
+                {
+                    _isDragging = true;
+                }
+                
                 _lastMousePos = e.Location;
-                Cursor = Cursors.SizeAll;
+                Capture = true; // Capture mouse for better experience
+            }
+            else if (e.Button == MouseButtons.Right)
+            {
+                // Right-click for context menu - show overlay controls
+                ShowOverlayContextMenu(e.Location);
             }
             base.OnMouseDown(e);
         }
         
         protected override void OnMouseMove(MouseEventArgs e)
         {
-            if (_isDragging && e.Button == MouseButtons.Left)
+            if (_isResizing && e.Button == MouseButtons.Left)
+            {
+                HandleResize(e.Location);
+            }
+            else if (_isDragging && e.Button == MouseButtons.Left)
             {
                 var deltaX = e.Location.X - _lastMousePos.X;
                 var deltaY = e.Location.Y - _lastMousePos.Y;
                 Location = new Point(Location.X + deltaX, Location.Y + deltaY);
+            }
+            else
+            {
+                // Update cursor based on mouse position
+                UpdateCursor(e.Location);
             }
             base.OnMouseMove(e);
         }
@@ -628,32 +685,180 @@ namespace TaskbarEqualizer.SystemTray
             if (e.Button == MouseButtons.Left)
             {
                 _isDragging = false;
-                Cursor = Cursors.Default;
+                _isResizing = false;
+                _resizeDirection = ResizeDirection.None;
+                Capture = false;
+                UpdateCursor(e.Location); // Update cursor after release
             }
             base.OnMouseUp(e);
         }
         
         protected override void OnMouseEnter(EventArgs e)
         {
-            Cursor = Cursors.SizeAll; // Show it's draggable
             base.OnMouseEnter(e);
         }
         
         protected override void OnMouseLeave(EventArgs e)
         {
-            if (!_isDragging)
+            if (!_isDragging && !_isResizing)
                 Cursor = Cursors.Default;
             base.OnMouseLeave(e);
         }
+        
+        private ResizeDirection GetResizeDirection(Point mousePos)
+        {
+            const int resizeMargin = 8; // Pixels from edge to trigger resize
+            
+            bool nearRight = mousePos.X >= Width - resizeMargin;
+            bool nearBottom = mousePos.Y >= Height - resizeMargin;
+            
+            if (nearRight && nearBottom)
+                return ResizeDirection.BottomRight;
+            else if (nearRight)
+                return ResizeDirection.Right;
+            else if (nearBottom)
+                return ResizeDirection.Bottom;
+            
+            return ResizeDirection.None;
+        }
+        
+        private void UpdateCursor(Point mousePos)
+        {
+            var direction = GetResizeDirection(mousePos);
+            
+            Cursor = direction switch
+            {
+                ResizeDirection.Right => Cursors.SizeWE,
+                ResizeDirection.Bottom => Cursors.SizeNS,
+                ResizeDirection.BottomRight => Cursors.SizeNWSE,
+                _ => Cursors.SizeAll // Default drag cursor
+            };
+        }
+        
+        private void HandleResize(Point mousePos)
+        {
+            var deltaX = mousePos.X - _lastMousePos.X;
+            var deltaY = mousePos.Y - _lastMousePos.Y;
+            
+            var newWidth = Width;
+            var newHeight = Height;
+            
+            switch (_resizeDirection)
+            {
+                case ResizeDirection.Right:
+                    newWidth = Math.Max(MinimumSize.Width, Math.Min(MaximumSize.Width, _originalSize.Width + deltaX));
+                    break;
+                    
+                case ResizeDirection.Bottom:
+                    newHeight = Math.Max(MinimumSize.Height, Math.Min(MaximumSize.Height, _originalSize.Height + deltaY));
+                    break;
+                    
+                case ResizeDirection.BottomRight:
+                    newWidth = Math.Max(MinimumSize.Width, Math.Min(MaximumSize.Width, _originalSize.Width + deltaX));
+                    newHeight = Math.Max(MinimumSize.Height, Math.Min(MaximumSize.Height, _originalSize.Height + deltaY));
+                    break;
+            }
+            
+            Size = new Size(newWidth, newHeight);
+        }
+        
+        private void ShowOverlayContextMenu(Point location)
+        {
+            var contextMenu = new ContextMenuStrip();
+            
+            // Add menu items for overlay control
+            contextMenu.Items.Add("Hide Overlay", null, (s, e) => Hide());
+            contextMenu.Items.Add("Always On Top", null, (s, e) => ForceToTop());
+            contextMenu.Items.Add("-"); // Separator
+            
+            // Size options
+            var sizeMenu = new ToolStripMenuItem("Size Presets");
+            sizeMenu.DropDownItems.Add("Compact (300x50)", null, (s, e) => Size = new Size(300, 50));
+            sizeMenu.DropDownItems.Add("Normal (500x80)", null, (s, e) => Size = new Size(500, 80));
+            sizeMenu.DropDownItems.Add("Wide (700x80)", null, (s, e) => Size = new Size(700, 80));
+            sizeMenu.DropDownItems.Add("Large (800x120)", null, (s, e) => Size = new Size(800, 120));
+            contextMenu.Items.Add(sizeMenu);
+            
+            contextMenu.Items.Add("-"); // Separator
+            contextMenu.Items.Add("Reset Position", null, (s, e) => ResetPosition());
+            
+            contextMenu.Show(this, location);
+        }
+        
+        private void ForceToTop()
+        {
+            // Force window back to top when it disappears
+            TopMost = false; // Reset
+            TopMost = true;  // Re-enable
+            BringToFront();
+            Activate();
+            
+            // Use Windows API to force it to top
+            if (Handle != IntPtr.Zero)
+            {
+                NativeMethods.SetWindowPos(Handle, NativeMethods.HWND_TOPMOST, 
+                    0, 0, 0, 0, 
+                    NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_SHOWWINDOW);
+            }
+        }
+        
+        private void ResetPosition()
+        {
+            // Reset to center of primary screen
+            var screen = Screen.PrimaryScreen;
+            if (screen != null)
+            {
+                var centerX = (screen.Bounds.Width - Width) / 2;
+                var centerY = screen.Bounds.Height - Height - 100; // Near bottom but not on taskbar
+                Location = new Point(centerX, centerY);
+            }
+        }
+        
+        private void EnsureTopMost()
+        {
+            try
+            {
+                if (!IsDisposed && Handle != IntPtr.Zero && Visible)
+                {
+                    // Check if window is still topmost by checking if any window is above it
+                    var topWindow = NativeMethods.GetTopWindow(IntPtr.Zero);
+                    if (topWindow != Handle)
+                    {
+                        // If we're not the top window, force ourselves back to top
+                        TopMost = false;
+                        TopMost = true;
+                        
+                        // Use Windows API to ensure we're topmost
+                        NativeMethods.SetWindowPos(Handle, NativeMethods.HWND_TOPMOST,
+                            0, 0, 0, 0,
+                            NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Error ensuring window stays on top");
+            }
+        }
 
+        protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+        {
+            // Handle Ctrl+Shift+E to bring overlay to front
+            if (keyData == (Keys.Control | Keys.Shift | Keys.E))
+            {
+                ForceToTop();
+                return true;
+            }
+            
+            return base.ProcessCmdKey(ref msg, keyData);
+        }
+        
         protected override CreateParams CreateParams
         {
             get
             {
                 var cp = base.CreateParams;
-                // Make window layered but allow interaction for dragging
-                cp.ExStyle |= NativeMethods.WS_EX_LAYERED | NativeMethods.WS_EX_TOPMOST;
-                // Removed WS_EX_TRANSPARENT to allow mouse interaction
+                cp.ExStyle |= NativeMethods.WS_EX_LAYERED | NativeMethods.WS_EX_TOPMOST | NativeMethods.WS_EX_TOOLWINDOW;
                 return cp;
             }
         }
@@ -668,9 +873,16 @@ namespace TaskbarEqualizer.SystemTray
         public const int WS_EX_LAYERED = 0x00080000;
         public const int WS_EX_TRANSPARENT = 0x00000020;
         public const int WS_EX_TOPMOST = 0x00000008;
+        public const int WS_EX_TOOLWINDOW = 0x00000080;
+        public const uint SWP_NOMOVE = 0x0002;
+        public const uint SWP_NOSIZE = 0x0001;
+        public const uint SWP_NOACTIVATE = 0x0010;
 
         [DllImport("user32.dll")]
         public static extern IntPtr FindWindow(string lpClassName, string? lpWindowName);
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr GetTopWindow(IntPtr hWnd);
 
         [DllImport("user32.dll")]
         public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);

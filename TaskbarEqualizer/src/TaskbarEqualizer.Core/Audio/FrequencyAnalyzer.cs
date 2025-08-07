@@ -476,17 +476,22 @@ namespace TaskbarEqualizer.Core.Audio
             {
                 while (!cancellationToken.IsCancellationRequested && _isAnalyzing)
                 {
-                    // Process available audio samples
+                    // Process available audio samples immediately
+                    bool processed = false;
                     while (_processingQueue.TryDequeue(out AudioProcessingItem? item))
                     {
                         if (item != null)
                         {
                             ProcessAudioSample(item);
+                            processed = true;
                         }
                     }
 
-                    // Small delay to prevent excessive CPU usage
-                    Thread.Sleep(1);
+                    // Only sleep if no work was done
+                    if (!processed)
+                    {
+                        Thread.Sleep(1);
+                    }
                 }
             }
             catch (Exception ex)
@@ -654,47 +659,41 @@ namespace TaskbarEqualizer.Core.Audio
 
         private void ApplySmoothing()
         {
-            // Calculate proper attack and decay coefficients (0 to 1 range)
-            double attackSamples = Math.Max(1.0, _config.AttackTime * SampleRate / 1000.0);
-            double decaySamples = Math.Max(1.0, _config.DecayTime * SampleRate / 1000.0);
+            // Use proper smoothing coefficients (lower = more responsive)
+            double smoothingFactor = _config.SmoothingFactor;
             
-            double attackCoeff = 1.0 - Math.Exp(-1.0 / attackSamples);
-            double decayCoeff = 1.0 - Math.Exp(-1.0 / decaySamples);
+            // For better responsiveness, use a lower smoothing factor
+            // Also fix the attack/decay logic
+            double attackCoeff = 0.8; // Fast rise (lower = faster)
+            double decayCoeff = 0.3; // Fast fall (lower = faster)
             
-            // Apply noise floor threshold
-            const double noiseFloor = 0.001;
-
             for (int i = 0; i < _config.FrequencyBands; i++)
             {
                 double current = _currentSpectrum![i];
                 double previous = _previousSpectrum![i];
                 
-                // Apply noise gate to current value
-                if (current < noiseFloor)
-                    current = 0.0;
-
                 double smoothed;
-                if (current >= previous)
+                if (current > previous)
                 {
-                    // Attack: Fast rise
-                    smoothed = previous + attackCoeff * (current - previous);
+                    // Attack: Fast rise - use less smoothing
+                    smoothed = previous + (1.0 - attackCoeff) * (current - previous);
                 }
                 else
                 {
-                    // Decay: Gradual fall with proper reset to prevent accumulation
-                    smoothed = previous * (1.0 - decayCoeff);
-                    
-                    // Force to zero if below threshold to prevent accumulation
-                    if (smoothed < noiseFloor * 0.1)
-                        smoothed = 0.0;
+                    // Decay: Fast fall
+                    smoothed = previous * decayCoeff + current * (1.0 - decayCoeff);
                 }
-
+                
+                // Force to zero when very small to prevent accumulation
+                if (smoothed < 0.001)
+                    smoothed = 0.0;
+                
                 _smoothingBuffer![i] = smoothed;
             }
 
-            // Update previous spectrum AFTER all calculations to avoid feedback loops
-            Array.Copy(_smoothingBuffer!, _previousSpectrum!, _config.FrequencyBands);
+            // Copy smoothed values back
             Array.Copy(_smoothingBuffer!, _currentSpectrum!, _config.FrequencyBands);
+            Array.Copy(_smoothingBuffer!, _previousSpectrum!, _config.FrequencyBands);
         }
 
         private void CalculateSpectrumStatistics(out double peakValue, out int peakBandIndex, out double rmsLevel)
@@ -784,37 +783,39 @@ namespace TaskbarEqualizer.Core.Audio
         
         private void CheckForSilenceReset(double rmsLevel)
         {
-            const double silenceThreshold = 0.0001; // Very low threshold for silence detection
+            const double silenceThreshold = 0.001;
             
             if (rmsLevel < silenceThreshold)
             {
+                // Immediately start decaying values during silence
+                for (int i = 0; i < _currentSpectrum!.Length; i++)
+                {
+                    _currentSpectrum[i] *= 0.9; // Decay by 10% each frame during silence
+                    _previousSpectrum![i] *= 0.9;
+                    
+                    if (_currentSpectrum[i] < 0.0001)
+                    {
+                        _currentSpectrum[i] = 0;
+                        _previousSpectrum[i] = 0;
+                    }
+                }
+                
+                // Clear buffers after 1 second of silence
                 if (_lastSilenceDetection == DateTime.MinValue)
                 {
                     _lastSilenceDetection = DateTime.UtcNow;
                 }
-                else if ((DateTime.UtcNow - _lastSilenceDetection).TotalMilliseconds > _config.SilenceResetTimeoutMs)
+                else if ((DateTime.UtcNow - _lastSilenceDetection).TotalMilliseconds > 1000)
                 {
-                    // Reset all buffers to prevent accumulation during prolonged silence
                     Array.Clear(_previousSpectrum!);
+                    Array.Clear(_currentSpectrum!);
                     Array.Clear(_smoothingBuffer!);
-                    
-                    // Reset moving average buffers
-                    if (_movingAverageBuffers != null)
-                    {
-                        for (int i = 0; i < _movingAverageBuffers.Length; i++)
-                        {
-                            _movingAverageBuffers[i].Clear();
-                        }
-                    }
-                    
-                    _logger.LogDebug("Reset spectrum buffers due to prolonged silence ({Duration:F1}s)", 
-                        (DateTime.UtcNow - _lastSilenceDetection).TotalSeconds);
                     _lastSilenceDetection = DateTime.MinValue;
                 }
             }
             else
             {
-                _lastSilenceDetection = DateTime.MinValue; // Reset silence timer when sound is detected
+                _lastSilenceDetection = DateTime.MinValue;
             }
         }
 

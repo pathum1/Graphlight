@@ -162,19 +162,19 @@ namespace TaskbarEqualizer.Core.Interfaces
         /// Smoothing factor for temporal stability (0.0-1.0).
         /// Higher values = more smoothing but slower response.
         /// </summary>
-        public double SmoothingFactor { get; set; } = 0.8;
+        public double SmoothingFactor { get; set; } = 0.3;
 
         /// <summary>
         /// Attack time in milliseconds for level increases.
         /// Shorter values make the analyzer more responsive to sudden increases.
         /// </summary>
-        public double AttackTime { get; set; } = 10.0;
+        public double AttackTime { get; set; } = 5.0;
 
         /// <summary>
         /// Decay time in milliseconds for level decreases.
-        /// Longer values make the visualization appear more stable.
+        /// Shorter values make the visualization more responsive to decreases.
         /// </summary>
-        public double DecayTime { get; set; } = 100.0;
+        public double DecayTime { get; set; } = 30.0;
 
         /// <summary>
         /// Minimum frequency to analyze in Hz.
@@ -208,10 +208,10 @@ namespace TaskbarEqualizer.Core.Interfaces
         public bool UseAdaptiveNoiseFloor { get; set; } = true;
         
         /// <summary>
-        /// Moving average size for stability (1-10). 
-        /// Higher values provide more stable output but slower response.
+        /// Moving average size for stability (1-5).
+        /// Lower values provide faster response while maintaining stability.
         /// </summary>
-        public int MovingAverageSize { get; set; } = 3;
+        public int MovingAverageSize { get; set; } = 1;
         
         /// <summary>
         /// Silence reset timeout in milliseconds.

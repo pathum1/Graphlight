@@ -2,6 +2,7 @@ using System;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 using Microsoft.Extensions.Logging;
 using TaskbarEqualizer.Core.Interfaces;
@@ -13,6 +14,15 @@ namespace TaskbarEqualizer.Main
     /// </summary>
     public partial class SpectrumAnalyzerWindow : Form
     {
+        // Windows API constants and methods for borderless window
+        private const int WS_EX_LAYERED = 0x80000;
+        private const int WS_EX_TRANSPARENT = 0x20;
+        
+        [DllImport("user32.dll")]
+        private static extern bool SetLayeredWindowAttributes(IntPtr hwnd, uint crKey, byte bAlpha, uint dwFlags);
+        
+        private const uint LWA_ALPHA = 0x2;
+        private const uint LWA_COLORKEY = 0x1;
         private readonly ILogger<SpectrumAnalyzerWindow> _logger;
         private SpectrumDataEventArgs? _currentSpectrum;
         private Timer? _refreshTimer;
@@ -84,6 +94,12 @@ namespace TaskbarEqualizer.Main
             MouseMove += SpectrumAnalyzerWindow_MouseMove;
             MouseUp += SpectrumAnalyzerWindow_MouseUp;
             
+            // Handle size changes to update region
+            SizeChanged += SpectrumAnalyzerWindow_SizeChanged;
+            
+            // Set initial region to eliminate borders
+            UpdateWindowRegion();
+            
             _logger.LogInformation("Spectrum analyzer window initialized");
         }
 
@@ -134,6 +150,20 @@ namespace TaskbarEqualizer.Main
             if (e.Button == MouseButtons.Left)
             {
                 _isDragging = false;
+            }
+        }
+
+        private void SpectrumAnalyzerWindow_SizeChanged(object? sender, EventArgs e)
+        {
+            UpdateWindowRegion();
+        }
+
+        private void UpdateWindowRegion()
+        {
+            // Create a region that exactly matches the client area to eliminate any borders
+            using (var region = new Region(new Rectangle(0, 0, Width, Height)))
+            {
+                Region = region;
             }
         }
 
@@ -196,7 +226,20 @@ namespace TaskbarEqualizer.Main
                 cp.Style &= ~0x00400000; // Remove WS_DLGFRAME
                 cp.ExStyle &= ~0x00000200; // Remove WS_EX_CLIENTEDGE
                 cp.ExStyle &= ~0x00000001; // Remove WS_EX_DLGMODALFRAME
+                
+                // Add layered window style for complete border removal
+                cp.ExStyle |= WS_EX_LAYERED;
                 return cp;
+            }
+        }
+
+        protected override void SetVisibleCore(bool value)
+        {
+            base.SetVisibleCore(value);
+            if (value && IsHandleCreated)
+            {
+                // Set the window to be fully opaque with no color key
+                SetLayeredWindowAttributes(Handle, 0, 255, LWA_ALPHA);
             }
         }
 

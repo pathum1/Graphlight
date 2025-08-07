@@ -530,22 +530,20 @@ namespace TaskbarEqualizer.SystemTray
             var availableWidth = size.Width - 4; // Leave 2px margin on each side
             var barWidth = (float)availableWidth / barCount;
             var maxHeight = size.Height - 8; // Leave space for drag area
-            const int resizeMargin = 8;
             
-            // Always draw a subtle background/border to indicate draggable area
-            using (var borderPen = new Pen(Color.FromArgb(80, 255, 255, 255), 1))
-            {
-                graphics.DrawRectangle(borderPen, 0, 0, size.Width - 1, size.Height - 1);
-            }
+            // Border made transparent - functionality remains
+            // using (var borderPen = new Pen(Color.FromArgb(0, 255, 255, 255), 1))
+            // {
+            //     graphics.DrawRectangle(borderPen, 0, 0, size.Width - 1, size.Height - 1);
+            // }
             
-            // Draw a subtle drag handle area at the top
-            using (var dragBrush = new SolidBrush(Color.FromArgb(40, 255, 255, 255)))
-            {
-                graphics.FillRectangle(dragBrush, 0, 0, size.Width, 4);
-            }
+            // Drag area made transparent - dragging still works via mouse events
+            // using (var dragBrush = new SolidBrush(Color.FromArgb(0, 255, 255, 255)))
+            // {
+            //     graphics.FillRectangle(dragBrush, 0, 0, size.Width, 4);
+            // }
 
-            // Draw resize indicators
-            DrawResizeIndicators(graphics, size, resizeMargin);
+            // DrawResizeIndicators(graphics, size, resizeMargin); // Commented out - resize still works via mouse detection
 
             // Create gradient brush from green to red
             using var gradientBrush = new LinearGradientBrush(
@@ -570,39 +568,20 @@ namespace TaskbarEqualizer.SystemTray
                 }
             }
             
-            // Draw small dots in the drag area to indicate it's draggable
-            using (var dotBrush = new SolidBrush(Color.FromArgb(100, 255, 255, 255)))
-            {
-                var centerX = size.Width / 2;
-                graphics.FillEllipse(dotBrush, centerX - 4, 1, 2, 2);
-                graphics.FillEllipse(dotBrush, centerX, 1, 2, 2);
-                graphics.FillEllipse(dotBrush, centerX + 4, 1, 2, 2);
-            }
+            // Drag dots made transparent - visual indicator removed but dragging still works
+            // using (var dotBrush = new SolidBrush(Color.FromArgb(0, 255, 255, 255)))
+            // {
+            //     var centerX = size.Width / 2;
+            //     graphics.FillEllipse(dotBrush, centerX - 4, 1, 2, 2);
+            //     graphics.FillEllipse(dotBrush, centerX, 1, 2, 2);
+            //     graphics.FillEllipse(dotBrush, centerX + 4, 1, 2, 2);
+            // }
         }
         
         private void DrawResizeIndicators(Graphics graphics, Size size, int resizeMargin)
         {
-            using var indicatorBrush = new SolidBrush(Color.FromArgb(60, 255, 255, 255));
-            
-            // Right edge resize indicator
-            graphics.FillRectangle(indicatorBrush, size.Width - resizeMargin, resizeMargin, resizeMargin, size.Height - resizeMargin * 2);
-            
-            // Bottom edge resize indicator
-            graphics.FillRectangle(indicatorBrush, resizeMargin, size.Height - resizeMargin, size.Width - resizeMargin * 2, resizeMargin);
-            
-            // Bottom-right corner resize indicator (stronger)
-            using var cornerBrush = new SolidBrush(Color.FromArgb(100, 255, 255, 255));
-            graphics.FillRectangle(cornerBrush, size.Width - resizeMargin, size.Height - resizeMargin, resizeMargin, resizeMargin);
-            
-            // Draw resize grip lines in the corner
-            using var gripPen = new Pen(Color.FromArgb(120, 255, 255, 255), 1);
-            for (int i = 1; i <= 3; i++)
-            {
-                int offset = i * 2;
-                graphics.DrawLine(gripPen, 
-                    size.Width - resizeMargin + offset, size.Height - 1,
-                    size.Width - 1, size.Height - resizeMargin + offset);
-            }
+            // Visual indicators removed - resize functionality preserved through mouse event handling
+            return;
         }
 
         public ValueTask DisposeAsync()

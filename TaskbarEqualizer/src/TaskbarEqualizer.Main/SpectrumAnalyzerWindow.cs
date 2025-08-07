@@ -2,7 +2,6 @@ using System;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Linq;
-using System.Runtime.InteropServices;
 using System.Windows.Forms;
 using Microsoft.Extensions.Logging;
 using TaskbarEqualizer.Core.Interfaces;
@@ -14,24 +13,11 @@ namespace TaskbarEqualizer.Main
     /// </summary>
     public partial class SpectrumAnalyzerWindow : Form
     {
-        // Windows API constants and methods for borderless window
-        private const int WS_EX_LAYERED = 0x80000;
-        private const int WS_EX_TRANSPARENT = 0x20;
-        
-        [DllImport("user32.dll")]
-        private static extern bool SetLayeredWindowAttributes(IntPtr hwnd, uint crKey, byte bAlpha, uint dwFlags);
-        
-        private const uint LWA_ALPHA = 0x2;
-        private const uint LWA_COLORKEY = 0x1;
         private readonly ILogger<SpectrumAnalyzerWindow> _logger;
         private SpectrumDataEventArgs? _currentSpectrum;
         private Timer? _refreshTimer;
         private float[] _smoothedSpectrum = new float[32];
         private readonly float _smoothingFactor = 0.7f;
-        
-        // For dragging the borderless window
-        private bool _isDragging = false;
-        private Point _dragStartPoint;
 
         public SpectrumAnalyzerWindow(ILogger<SpectrumAnalyzerWindow> logger)
         {
@@ -53,14 +39,6 @@ namespace TaskbarEqualizer.Main
             MinimumSize = new Size(400, 200);
             BackColor = Color.Black;
             
-            // Remove all borders and visual indicators
-            FormBorderStyle = FormBorderStyle.None;
-            
-            // Remove resize handles and selection borders
-            MaximizeBox = false;
-            MinimizeBox = false;
-            ShowIcon = false;
-            ControlBox = false;
             
             // Enable double buffering for smooth animation
             SetStyle(ControlStyles.AllPaintingInWmPaint | 
@@ -89,16 +67,6 @@ namespace TaskbarEqualizer.Main
             // Handle resize
             Resize += SpectrumAnalyzerWindow_Resize;
             
-            // Handle mouse events for dragging the borderless window
-            MouseDown += SpectrumAnalyzerWindow_MouseDown;
-            MouseMove += SpectrumAnalyzerWindow_MouseMove;
-            MouseUp += SpectrumAnalyzerWindow_MouseUp;
-            
-            // Handle size changes to update region
-            SizeChanged += SpectrumAnalyzerWindow_SizeChanged;
-            
-            // Set initial region to eliminate borders
-            UpdateWindowRegion();
             
             _logger.LogInformation("Spectrum analyzer window initialized");
         }
@@ -125,47 +93,6 @@ namespace TaskbarEqualizer.Main
             }
         }
 
-        private void SpectrumAnalyzerWindow_MouseDown(object? sender, MouseEventArgs e)
-        {
-            if (e.Button == MouseButtons.Left)
-            {
-                _isDragging = true;
-                _dragStartPoint = new Point(e.X, e.Y);
-            }
-        }
-
-        private void SpectrumAnalyzerWindow_MouseMove(object? sender, MouseEventArgs e)
-        {
-            if (_isDragging)
-            {
-                var newLocation = new Point(
-                    Location.X + e.X - _dragStartPoint.X,
-                    Location.Y + e.Y - _dragStartPoint.Y);
-                Location = newLocation;
-            }
-        }
-
-        private void SpectrumAnalyzerWindow_MouseUp(object? sender, MouseEventArgs e)
-        {
-            if (e.Button == MouseButtons.Left)
-            {
-                _isDragging = false;
-            }
-        }
-
-        private void SpectrumAnalyzerWindow_SizeChanged(object? sender, EventArgs e)
-        {
-            UpdateWindowRegion();
-        }
-
-        private void UpdateWindowRegion()
-        {
-            // Create a region that exactly matches the client area to eliminate any borders
-            using (var region = new Region(new Rectangle(0, 0, Width, Height)))
-            {
-                Region = region;
-            }
-        }
 
         public void ShowWindow()
         {
@@ -215,33 +142,6 @@ namespace TaskbarEqualizer.Main
             }
         }
 
-        protected override CreateParams CreateParams
-        {
-            get
-            {
-                CreateParams cp = base.CreateParams;
-                // Remove all window decorations and borders at the Windows level
-                cp.Style &= ~0x00C00000; // Remove WS_CAPTION
-                cp.Style &= ~0x00800000; // Remove WS_BORDER
-                cp.Style &= ~0x00400000; // Remove WS_DLGFRAME
-                cp.ExStyle &= ~0x00000200; // Remove WS_EX_CLIENTEDGE
-                cp.ExStyle &= ~0x00000001; // Remove WS_EX_DLGMODALFRAME
-                
-                // Add layered window style for complete border removal
-                cp.ExStyle |= WS_EX_LAYERED;
-                return cp;
-            }
-        }
-
-        protected override void SetVisibleCore(bool value)
-        {
-            base.SetVisibleCore(value);
-            if (value && IsHandleCreated)
-            {
-                // Set the window to be fully opaque with no color key
-                SetLayeredWindowAttributes(Handle, 0, 255, LWA_ALPHA);
-            }
-        }
 
         protected override void OnPaint(PaintEventArgs e)
         {

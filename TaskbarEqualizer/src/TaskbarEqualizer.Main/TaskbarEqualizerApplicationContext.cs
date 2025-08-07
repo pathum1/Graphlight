@@ -37,7 +37,7 @@ namespace TaskbarEqualizer.Main
             _initTimer.Start();
         }
 
-        private async void InitTimer_Tick(object sender, EventArgs e)
+        private async void InitTimer_Tick(object? sender, EventArgs e)
         {
             _initTimer.Stop();
             _initTimer.Dispose();

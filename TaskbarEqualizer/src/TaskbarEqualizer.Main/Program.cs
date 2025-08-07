@@ -59,7 +59,8 @@ namespace TaskbarEqualizer.Main
             EmergencyLog($"OS: {Environment.OSVersion}");
             EmergencyLog($".NET Version: {Environment.Version}");
 
-            // Enable visual styles for Windows Forms
+            // Enable visual styles and DPI awareness for Windows Forms
+            Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             EmergencyLog("Windows Forms initialized");

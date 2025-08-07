@@ -46,6 +46,14 @@ namespace TaskbarEqualizer.Core.Audio
         private long _totalProcessedSamples;
         private double _averageProcessingTimeMs;
         private int _processingCount;
+        
+        // Noise floor and silence detection
+        private DateTime _lastSilenceDetection = DateTime.MinValue;
+        private readonly double[] _recentNoiseFloorSamples = new double[10];
+        private int _noiseFloorSampleIndex = 0;
+        
+        // Moving average buffers for stability
+        private CircularBuffer<double>[]? _movingAverageBuffers;
 
         /// <summary>
         /// Initializes a new instance of the FrequencyAnalyzer.
@@ -96,6 +104,63 @@ namespace TaskbarEqualizer.Core.Audio
         #region Public Methods
 
         /// <inheritdoc />
+        public async Task ProcessAudioSamplesAsync(float[] samples, int sampleCount, long timestampTicks)
+        {
+            if (_disposed)
+                throw new ObjectDisposedException(nameof(FrequencyAnalyzer));
+
+            if (samples == null)
+                throw new ArgumentNullException(nameof(samples));
+
+            if (sampleCount <= 0 || sampleCount > samples.Length)
+                throw new ArgumentOutOfRangeException(nameof(sampleCount));
+
+            if (!_isAnalyzing)
+            {
+                _logger.LogDebug("Frequency analyzer not running - ignoring audio samples");
+                return;
+            }
+
+            try
+            {
+                // Get a buffer from the pool
+                var pooledSamples = _samplePool.Get();
+                if (pooledSamples == null)
+                {
+                    _logger.LogWarning("Failed to get sample buffer from pool - dropping audio data");
+                    return;
+                }
+
+                // Copy the audio samples (only copy what fits)
+                var copyCount = Math.Min(sampleCount, pooledSamples.Length);
+                Array.Copy(samples, pooledSamples, copyCount);
+
+                // Create processing item and queue it
+                var processingItem = new AudioProcessingItem 
+                { 
+                    Samples = pooledSamples, 
+                    SampleCount = copyCount, 
+                    TimestampTicks = timestampTicks 
+                };
+                
+                if (!_processingQueue.TryEnqueue(processingItem))
+                {
+                    _logger.LogDebug("Audio processing queue full - dropping samples");
+                    _samplePool.Return(pooledSamples);
+                    return;
+                }
+
+                _logger.LogDebug("Queued audio samples for processing: {SampleCount} samples", copyCount);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error queuing audio samples for processing");
+            }
+
+            await Task.CompletedTask;
+        }
+
+        /// <inheritdoc />
         public async Task ConfigureAsync(int fftSize, int sampleRate, int frequencyBands, double smoothingFactor, CancellationToken cancellationToken = default)
         {
             if (_disposed)
@@ -142,45 +207,6 @@ namespace TaskbarEqualizer.Core.Audio
             _logger.LogDebug("Frequency analyzer configuration completed");
         }
 
-        /// <inheritdoc />
-        public async Task ProcessAudioSamplesAsync(float[] samples, int sampleCount, long timestampTicks)
-        {
-            if (_disposed)
-                throw new ObjectDisposedException(nameof(FrequencyAnalyzer));
-
-            if (samples == null)
-                throw new ArgumentNullException(nameof(samples));
-
-            if (sampleCount <= 0 || sampleCount > samples.Length)
-                throw new ArgumentOutOfRangeException(nameof(sampleCount));
-
-            if (!_isAnalyzing)
-                return;
-
-            // Create processing item and queue it
-            var processingItem = new AudioProcessingItem
-            {
-                Samples = _samplePool.Get(),
-                SampleCount = Math.Min(sampleCount, _config.FftSize),
-                TimestampTicks = timestampTicks
-            };
-            
-            _logger.LogDebug("Processing audio sample: count={SampleCount}, timestamp={Timestamp}", 
-                processingItem.SampleCount, timestampTicks);
-
-            // Copy samples to our internal buffer
-            Array.Copy(samples, 0, processingItem.Samples, 0, processingItem.SampleCount);
-
-            // Queue for processing (non-blocking)
-            if (!_processingQueue.TryEnqueue(processingItem))
-            {
-                // Queue is full, drop this sample to maintain real-time performance
-                _samplePool.Return(processingItem.Samples);
-                _logger.LogDebug("Dropped audio sample due to full processing queue");
-            }
-
-            await Task.CompletedTask; // Make method async without actual async work
-        }
 
         /// <inheritdoc />
         public async Task StartAnalysisAsync(CancellationToken cancellationToken = default)
@@ -426,10 +452,20 @@ namespace TaskbarEqualizer.Core.Audio
             _currentSpectrum = new double[_config.FrequencyBands];
             _previousSpectrum = new double[_config.FrequencyBands];
             _smoothingBuffer = new double[_config.FrequencyBands];
+            
+            // Initialize moving average buffers
+            _movingAverageBuffers = new CircularBuffer<double>[_config.FrequencyBands];
+            for (int i = 0; i < _config.FrequencyBands; i++)
+            {
+                _movingAverageBuffers[i] = new CircularBuffer<double>(_config.MovingAverageSize);
+            }
 
             Array.Clear(_currentSpectrum);
             Array.Clear(_previousSpectrum);
             Array.Clear(_smoothingBuffer);
+            
+            // Reset silence detection
+            _lastSilenceDetection = DateTime.MinValue;
         }
 
         private void ProcessingLoop(CancellationToken cancellationToken)
@@ -478,10 +514,22 @@ namespace TaskbarEqualizer.Core.Audio
 
             try
             {
-                // Apply windowing and copy to FFT buffer
-                for (int i = 0; i < Math.Min(item.SampleCount, _config.FftSize); i++)
+                _logger.LogDebug("Starting audio sample processing: samples={Count}, fftSize={FftSize}", 
+                    item.SampleCount, _config.FftSize);
+                // Ensure buffers are initialized
+                if (_fftBuffer == null || _window == null || _magnitudeBuffer == null || _currentSpectrum == null)
                 {
-                    _fftBuffer![i] = item.Samples[i] * _window![i];
+                    _logger.LogError("Processing buffers not initialized properly");
+                    return;
+                }
+                
+                // Apply windowing and copy to FFT buffer
+                var samplesToProcess = Math.Min(item.SampleCount, _config.FftSize);
+                _logger.LogDebug("Processing {SamplesToProcess} samples", samplesToProcess);
+                
+                for (int i = 0; i < samplesToProcess; i++)
+                {
+                    _fftBuffer[i] = item.Samples[i] * _window[i];
                 }
 
                 // Zero-pad if necessary
@@ -491,7 +539,9 @@ namespace TaskbarEqualizer.Core.Audio
                 }
 
                 // Perform FFT
-                var fftResult = FftSharp.FFT.Forward(_fftBuffer!);
+                _logger.LogDebug("Performing FFT on {Size} samples", _fftBuffer.Length);
+                var fftResult = FftSharp.FFT.Forward(_fftBuffer);
+                _logger.LogDebug("FFT completed, result length: {Length}", fftResult.Length);
 
                 // Calculate magnitudes
                 for (int i = 0; i < _magnitudeBuffer!.Length; i++)
@@ -502,13 +552,18 @@ namespace TaskbarEqualizer.Core.Audio
                 }
 
                 // Map FFT bins to frequency bands
+                _logger.LogDebug("Mapping frequency bands");
                 MapFrequencyBands();
 
                 // Apply smoothing
+                _logger.LogDebug("Applying smoothing");
                 ApplySmoothing();
 
                 // Calculate statistics
                 CalculateSpectrumStatistics(out double peakValue, out int peakBandIndex, out double rmsLevel);
+                
+                // Check for prolonged silence and reset buffers if needed
+                CheckForSilenceReset(rmsLevel);
 
                 // Get spectrum array from pool and copy data
                 var spectrum = _spectrumPool.Get();
@@ -536,7 +591,10 @@ namespace TaskbarEqualizer.Core.Audio
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error processing audio sample");
+                _logger.LogError(ex, "CRITICAL ERROR processing audio sample at step: {Step}", "unknown");
+                // Log detailed state for debugging
+                _logger.LogError("Buffer states - FFT: {FFTNull}, Window: {WindowNull}, Magnitude: {MagNull}, Current: {CurNull}",
+                    _fftBuffer == null, _window == null, _magnitudeBuffer == null, _currentSpectrum == null);
             }
             finally
             {
@@ -548,19 +606,29 @@ namespace TaskbarEqualizer.Core.Audio
         private void MapFrequencyBands()
         {
             Array.Clear(_currentSpectrum!);
+            
+            // Calculate adaptive noise floor
+            double noiseFloor = _config.UseAdaptiveNoiseFloor ? CalculateAdaptiveNoiseFloor() : _config.NoiseFloor;
 
             for (int band = 0; band < _config.FrequencyBands; band++)
             {
                 int fftBin = _bandMappings![band];
                 double magnitude = _magnitudeBuffer![fftBin];
                 
-                // Apply logarithmic scaling for better visualization
-                if (magnitude > 0)
+                // Apply noise gate BEFORE logarithmic scaling
+                if (magnitude < noiseFloor)
                 {
-                    _currentSpectrum![band] = Math.Log10(1 + magnitude * 9) * _bandWeights![band];
+                    _currentSpectrum![band] = 0.0;
+                    continue;
                 }
+                
+                // Apply logarithmic scaling for better visualization
+                _currentSpectrum![band] = Math.Log10(1 + magnitude * 9) * _bandWeights![band];
             }
 
+            // Apply moving average for stability
+            ApplyMovingAverage();
+            
             // Normalize to 0-1 range
             NormalizeSpectrum();
         }
@@ -586,24 +654,46 @@ namespace TaskbarEqualizer.Core.Audio
 
         private void ApplySmoothing()
         {
-            double smoothing = _config.SmoothingFactor;
-            double attackFactor = 1.0 - Math.Exp(-1.0 / (_config.AttackTime * SampleRate / 1000.0));
-            double decayFactor = 1.0 - Math.Exp(-1.0 / (_config.DecayTime * SampleRate / 1000.0));
+            // Calculate proper attack and decay coefficients (0 to 1 range)
+            double attackSamples = Math.Max(1.0, _config.AttackTime * SampleRate / 1000.0);
+            double decaySamples = Math.Max(1.0, _config.DecayTime * SampleRate / 1000.0);
+            
+            double attackCoeff = 1.0 - Math.Exp(-1.0 / attackSamples);
+            double decayCoeff = 1.0 - Math.Exp(-1.0 / decaySamples);
+            
+            // Apply noise floor threshold
+            const double noiseFloor = 0.001;
 
             for (int i = 0; i < _config.FrequencyBands; i++)
             {
                 double current = _currentSpectrum![i];
                 double previous = _previousSpectrum![i];
+                
+                // Apply noise gate to current value
+                if (current < noiseFloor)
+                    current = 0.0;
 
-                // Use different smoothing for attack vs decay
-                double factor = current > previous ? attackFactor : decayFactor;
-                double smoothed = previous + factor * (current - previous);
+                double smoothed;
+                if (current >= previous)
+                {
+                    // Attack: Fast rise
+                    smoothed = previous + attackCoeff * (current - previous);
+                }
+                else
+                {
+                    // Decay: Gradual fall with proper reset to prevent accumulation
+                    smoothed = previous * (1.0 - decayCoeff);
+                    
+                    // Force to zero if below threshold to prevent accumulation
+                    if (smoothed < noiseFloor * 0.1)
+                        smoothed = 0.0;
+                }
 
                 _smoothingBuffer![i] = smoothed;
-                _previousSpectrum[i] = smoothed;
             }
 
-            // Copy smoothed values back to current spectrum
+            // Update previous spectrum AFTER all calculations to avoid feedback loops
+            Array.Copy(_smoothingBuffer!, _previousSpectrum!, _config.FrequencyBands);
             Array.Copy(_smoothingBuffer!, _currentSpectrum!, _config.FrequencyBands);
         }
 
@@ -639,6 +729,92 @@ namespace TaskbarEqualizer.Core.Audio
             {
                 _logger.LogDebug("Processing stats: Avg={AvgProcessingTime:F2}ms, Samples={TotalSamples}, Count={ProcessingCount}",
                     _averageProcessingTimeMs, _totalProcessedSamples, _processingCount);
+            }
+        }
+        
+        private double CalculateAdaptiveNoiseFloor()
+        {
+            // Calculate noise floor from quiet frequency bins (lower frequencies are usually quieter in background noise)
+            double sum = 0.0;
+            int count = 0;
+            int binsToCheck = Math.Min(_magnitudeBuffer!.Length / 8, 32); // Check lower frequency bins
+            
+            for (int i = 1; i < binsToCheck; i++) // Skip DC component at index 0
+            {
+                double magnitude = _magnitudeBuffer[i];
+                if (magnitude > 0.0001) // Only consider non-zero values
+                {
+                    sum += magnitude;
+                    count++;
+                }
+            }
+            
+            double average = count > 0 ? sum / count : 0.001;
+            
+            // Store in circular buffer for stability
+            _recentNoiseFloorSamples[_noiseFloorSampleIndex] = average;
+            _noiseFloorSampleIndex = (_noiseFloorSampleIndex + 1) % _recentNoiseFloorSamples.Length;
+            
+            // Calculate stable noise floor from recent samples
+            double noiseFloorSum = 0.0;
+            int validSamples = 0;
+            for (int i = 0; i < _recentNoiseFloorSamples.Length; i++)
+            {
+                if (_recentNoiseFloorSamples[i] > 0)
+                {
+                    noiseFloorSum += _recentNoiseFloorSamples[i];
+                    validSamples++;
+                }
+            }
+            
+            double adaptiveFloor = validSamples > 0 ? noiseFloorSum / validSamples : 0.001;
+            return Math.Max(_config.NoiseFloor, adaptiveFloor * 2.5); // 2.5x average as threshold
+        }
+        
+        private void ApplyMovingAverage()
+        {
+            if (_movingAverageBuffers == null) return;
+            
+            for (int i = 0; i < _config.FrequencyBands; i++)
+            {
+                _movingAverageBuffers[i].Add(_currentSpectrum![i]);
+                _currentSpectrum[i] = _movingAverageBuffers[i].Average();
+            }
+        }
+        
+        private void CheckForSilenceReset(double rmsLevel)
+        {
+            const double silenceThreshold = 0.0001; // Very low threshold for silence detection
+            
+            if (rmsLevel < silenceThreshold)
+            {
+                if (_lastSilenceDetection == DateTime.MinValue)
+                {
+                    _lastSilenceDetection = DateTime.UtcNow;
+                }
+                else if ((DateTime.UtcNow - _lastSilenceDetection).TotalMilliseconds > _config.SilenceResetTimeoutMs)
+                {
+                    // Reset all buffers to prevent accumulation during prolonged silence
+                    Array.Clear(_previousSpectrum!);
+                    Array.Clear(_smoothingBuffer!);
+                    
+                    // Reset moving average buffers
+                    if (_movingAverageBuffers != null)
+                    {
+                        for (int i = 0; i < _movingAverageBuffers.Length; i++)
+                        {
+                            _movingAverageBuffers[i].Clear();
+                        }
+                    }
+                    
+                    _logger.LogDebug("Reset spectrum buffers due to prolonged silence ({Duration:F1}s)", 
+                        (DateTime.UtcNow - _lastSilenceDetection).TotalSeconds);
+                    _lastSilenceDetection = DateTime.MinValue;
+                }
+            }
+            else
+            {
+                _lastSilenceDetection = DateTime.MinValue; // Reset silence timer when sound is detected
             }
         }
 
@@ -686,6 +862,51 @@ namespace TaskbarEqualizer.Core.Audio
             public float[] Samples { get; set; } = Array.Empty<float>();
             public int SampleCount { get; set; }
             public long TimestampTicks { get; set; }
+        }
+        
+        /// <summary>
+        /// Simple circular buffer for double values used in spectrum smoothing.
+        /// </summary>
+        private class CircularBuffer<T>
+        {
+            private readonly T[] _buffer;
+            private readonly int _capacity;
+            private int _head = 0;
+            private int _count = 0;
+
+            public CircularBuffer(int capacity)
+            {
+                _capacity = capacity;
+                _buffer = new T[capacity];
+            }
+
+            public void Add(T item)
+            {
+                _buffer[_head] = item;
+                _head = (_head + 1) % _capacity;
+                
+                if (_count < _capacity)
+                    _count++;
+            }
+
+            public double Average()
+            {
+                if (_count == 0) return 0.0;
+                
+                double sum = 0.0;
+                for (int i = 0; i < _count; i++)
+                {
+                    sum += Convert.ToDouble(_buffer[i]);
+                }
+                return sum / _count;
+            }
+
+            public void Clear()
+            {
+                _head = 0;
+                _count = 0;
+                Array.Clear(_buffer, 0, _capacity);
+            }
         }
 
         #endregion

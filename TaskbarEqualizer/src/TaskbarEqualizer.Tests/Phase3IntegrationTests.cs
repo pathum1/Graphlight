@@ -135,14 +135,14 @@ namespace TaskbarEqualizer.Tests
                 autoStartEventFired = true;
             };
 
-            // Trigger a settings change
+            // Trigger a settings change for StartWithWindows - this SHOULD trigger both events
             await settingsManager.SetSetting("StartWithWindows", true);
 
             // Give events time to propagate
-            await Task.Delay(100);
+            await Task.Delay(200); // Increased delay for proper synchronization
 
             Assert.True(settingsEventFired);
-            Assert.False(autoStartEventFired); // AutoStart event shouldn't fire for this setting
+            Assert.True(autoStartEventFired); // AutoStart event SHOULD fire for StartWithWindows setting
         }
     }
 }

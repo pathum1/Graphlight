@@ -195,6 +195,29 @@ namespace TaskbarEqualizer.Core.Interfaces
         /// Apply window function to reduce spectral leakage.
         /// </summary>
         public WindowFunction WindowFunction { get; set; } = WindowFunction.Hann;
+        
+        /// <summary>
+        /// Noise floor threshold in linear scale (0.001 = -60dB).
+        /// Values below this threshold are treated as silence.
+        /// </summary>
+        public double NoiseFloor { get; set; } = 0.001;
+        
+        /// <summary>
+        /// Enable adaptive noise floor calculation based on ambient noise levels.
+        /// </summary>
+        public bool UseAdaptiveNoiseFloor { get; set; } = true;
+        
+        /// <summary>
+        /// Moving average size for stability (1-10). 
+        /// Higher values provide more stable output but slower response.
+        /// </summary>
+        public int MovingAverageSize { get; set; } = 3;
+        
+        /// <summary>
+        /// Silence reset timeout in milliseconds.
+        /// After this period of silence, spectrum buffers are reset to prevent accumulation.
+        /// </summary>
+        public double SilenceResetTimeoutMs { get; set; } = 2000.0;
     }
 
     /// <summary>

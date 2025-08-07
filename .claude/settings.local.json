@@ -24,7 +24,10 @@
       "Bash(TaskbarEqualizer.Main.exe)",
       "Bash(find:*)",
       "Bash(taskkill:*)",
-      "Bash(timeout:*)"
+      "Bash(timeout:*)",
+      "Bash(start TaskbarEqualizer.Main.exe)",
+      "Bash(start:*)",
+      "Bash(\"J:\\Graphlight\\TaskbarEqualizer\\src\\TaskbarEqualizer.Main\\bin\\Debug\\net8.0-windows\\TaskbarEqualizer.Main.exe\")"
     ],
     "deny": []
   }

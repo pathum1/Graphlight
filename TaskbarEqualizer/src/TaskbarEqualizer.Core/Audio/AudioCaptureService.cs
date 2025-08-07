@@ -31,6 +31,12 @@ namespace TaskbarEqualizer.Core.Audio
         private readonly object _stateLock = new object();
         private int _bufferSize = 1024;
         private long _lastTimestamp;
+        
+        // Circuit breaker for error recovery
+        private int _consecutiveErrors = 0;
+        private DateTime _lastErrorTime = DateTime.MinValue;
+        private const int MAX_CONSECUTIVE_ERRORS = 10;
+        private static readonly TimeSpan ERROR_RESET_INTERVAL = TimeSpan.FromSeconds(30);
 
         /// <summary>
         /// Initializes a new instance of the AudioCaptureService.
@@ -344,6 +350,21 @@ namespace TaskbarEqualizer.Core.Audio
             if (_disposed || !_isCapturing || e.BytesRecorded == 0)
                 return;
 
+            // Circuit breaker: skip processing if too many consecutive errors
+            if (_consecutiveErrors >= MAX_CONSECUTIVE_ERRORS)
+            {
+                if (DateTime.Now - _lastErrorTime < ERROR_RESET_INTERVAL)
+                {
+                    return; // Skip processing during cooldown period
+                }
+                else
+                {
+                    // Reset error counter after cooldown
+                    _consecutiveErrors = 0;
+                    _logger.LogInformation("Audio processing error circuit breaker reset");
+                }
+            }
+
             try
             {
                 var timestamp = Environment.TickCount64;
@@ -352,8 +373,10 @@ namespace TaskbarEqualizer.Core.Audio
                 if (format == null)
                     return;
 
-                // Convert bytes to float samples
-                var sampleCount = e.BytesRecorded / (format.BitsPerSample / 8);
+                // Convert bytes to float samples - account for stereo (2 channels)
+                var bytesPerSample = format.BitsPerSample / 8;
+                var totalSamples = e.BytesRecorded / bytesPerSample;
+                var sampleCount = format.Channels == 2 ? totalSamples / 2 : totalSamples; // Mono output for FFT
                 var samples = _samplePool.Get();
                 
                 try
@@ -365,24 +388,24 @@ namespace TaskbarEqualizer.Core.Audio
                         samples = new float[sampleCount];
                     }
 
-                    // Convert based on bit depth
+                    // Convert based on bit depth with stereo-to-mono conversion
                     if (format.BitsPerSample == 16)
                     {
-                        ConvertInt16ToFloat(e.Buffer, samples, sampleCount);
+                        ConvertInt16ToFloat(e.Buffer, samples, sampleCount, format.Channels);
                     }
                     else if (format.BitsPerSample == 24)
                     {
-                        ConvertInt24ToFloat(e.Buffer, samples, sampleCount);
+                        ConvertInt24ToFloat(e.Buffer, samples, sampleCount, format.Channels);
                     }
                     else if (format.BitsPerSample == 32)
                     {
                         if (format.Encoding == WaveFormatEncoding.IeeeFloat)
                         {
-                            ConvertFloat32ToFloat(e.Buffer, samples, sampleCount);
+                            ConvertFloat32ToFloat(e.Buffer, samples, sampleCount, format.Channels);
                         }
                         else
                         {
-                            ConvertInt32ToFloat(e.Buffer, samples, sampleCount);
+                            ConvertInt32ToFloat(e.Buffer, samples, sampleCount, format.Channels);
                         }
                     }
                     else
@@ -405,7 +428,21 @@ namespace TaskbarEqualizer.Core.Audio
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error processing audio data");
+                _consecutiveErrors++;
+                _lastErrorTime = DateTime.Now;
+                
+                _logger.LogError(ex, "Error processing audio data (consecutive errors: {Count})", _consecutiveErrors);
+                
+                if (_consecutiveErrors >= MAX_CONSECUTIVE_ERRORS)
+                {
+                    _logger.LogWarning("Audio processing circuit breaker triggered due to {Count} consecutive errors", _consecutiveErrors);
+                }
+            }
+            
+            // Reset error counter on success
+            if (_consecutiveErrors > 0)
+            {
+                _consecutiveErrors = 0;
             }
         }
 
@@ -452,56 +489,111 @@ namespace TaskbarEqualizer.Core.Audio
 
         #region Audio Format Conversion Methods
 
-        private static unsafe void ConvertInt16ToFloat(byte[] buffer, float[] samples, int sampleCount)
+        private static unsafe void ConvertInt16ToFloat(byte[] buffer, float[] samples, int sampleCount, int channels)
         {
             fixed (byte* bufferPtr = buffer)
             fixed (float* samplesPtr = samples)
             {
                 short* int16Ptr = (short*)bufferPtr;
-                for (int i = 0; i < sampleCount; i++)
+                if (channels == 2)
                 {
-                    samplesPtr[i] = int16Ptr[i] / 32768.0f;
+                    // Stereo to mono: average left and right channels
+                    for (int i = 0; i < sampleCount; i++)
+                    {
+                        samplesPtr[i] = (int16Ptr[i * 2] + int16Ptr[i * 2 + 1]) / 65536.0f;
+                    }
+                }
+                else
+                {
+                    // Mono or other: direct conversion
+                    for (int i = 0; i < sampleCount; i++)
+                    {
+                        samplesPtr[i] = int16Ptr[i] / 32768.0f;
+                    }
                 }
             }
         }
 
-        private static unsafe void ConvertInt24ToFloat(byte[] buffer, float[] samples, int sampleCount)
+        private static unsafe void ConvertInt24ToFloat(byte[] buffer, float[] samples, int sampleCount, int channels)
         {
             fixed (byte* bufferPtr = buffer)
             fixed (float* samplesPtr = samples)
             {
-                for (int i = 0; i < sampleCount; i++)
+                if (channels == 2)
                 {
-                    // 24-bit samples are 3 bytes each
-                    int byteIndex = i * 3;
-                    int sample24 = (bufferPtr[byteIndex] << 8) | (bufferPtr[byteIndex + 1] << 16) | (bufferPtr[byteIndex + 2] << 24);
-                    samplesPtr[i] = sample24 / 2147483648.0f; // Divide by 2^31
+                    // Stereo to mono: average left and right channels
+                    for (int i = 0; i < sampleCount; i++)
+                    {
+                        // 24-bit samples are 3 bytes each, 2 channels = 6 bytes per sample pair
+                        int leftIndex = i * 6;
+                        int rightIndex = leftIndex + 3;
+                        
+                        int leftSample = (bufferPtr[leftIndex] << 8) | (bufferPtr[leftIndex + 1] << 16) | (bufferPtr[leftIndex + 2] << 24);
+                        int rightSample = (bufferPtr[rightIndex] << 8) | (bufferPtr[rightIndex + 1] << 16) | (bufferPtr[rightIndex + 2] << 24);
+                        
+                        samplesPtr[i] = ((leftSample + rightSample) * 0.5f) / 2147483648.0f;
+                    }
+                }
+                else
+                {
+                    // Mono or other: direct conversion
+                    for (int i = 0; i < sampleCount; i++)
+                    {
+                        // 24-bit samples are 3 bytes each
+                        int byteIndex = i * 3;
+                        int sample24 = (bufferPtr[byteIndex] << 8) | (bufferPtr[byteIndex + 1] << 16) | (bufferPtr[byteIndex + 2] << 24);
+                        samplesPtr[i] = sample24 / 2147483648.0f; // Divide by 2^31
+                    }
                 }
             }
         }
 
-        private static unsafe void ConvertInt32ToFloat(byte[] buffer, float[] samples, int sampleCount)
+        private static unsafe void ConvertInt32ToFloat(byte[] buffer, float[] samples, int sampleCount, int channels)
         {
             fixed (byte* bufferPtr = buffer)
             fixed (float* samplesPtr = samples)
             {
                 int* int32Ptr = (int*)bufferPtr;
-                for (int i = 0; i < sampleCount; i++)
+                if (channels == 2)
                 {
-                    samplesPtr[i] = int32Ptr[i] / 2147483648.0f; // Divide by 2^31
+                    // Stereo to mono: average left and right channels
+                    for (int i = 0; i < sampleCount; i++)
+                    {
+                        samplesPtr[i] = ((int32Ptr[i * 2] + int32Ptr[i * 2 + 1]) * 0.5f) / 2147483648.0f;
+                    }
+                }
+                else
+                {
+                    // Mono or other: direct conversion
+                    for (int i = 0; i < sampleCount; i++)
+                    {
+                        samplesPtr[i] = int32Ptr[i] / 2147483648.0f; // Divide by 2^31
+                    }
                 }
             }
         }
 
-        private static unsafe void ConvertFloat32ToFloat(byte[] buffer, float[] samples, int sampleCount)
+        private static unsafe void ConvertFloat32ToFloat(byte[] buffer, float[] samples, int sampleCount, int channels)
         {
             fixed (byte* bufferPtr = buffer)
             fixed (float* samplesPtr = samples)
             {
                 float* floatPtr = (float*)bufferPtr;
-                for (int i = 0; i < sampleCount; i++)
+                if (channels == 2)
                 {
-                    samplesPtr[i] = floatPtr[i];
+                    // Stereo to mono: average left and right channels
+                    for (int i = 0; i < sampleCount; i++)
+                    {
+                        samplesPtr[i] = (floatPtr[i * 2] + floatPtr[i * 2 + 1]) * 0.5f;
+                    }
+                }
+                else
+                {
+                    // Mono or other: direct copy
+                    for (int i = 0; i < sampleCount; i++)
+                    {
+                        samplesPtr[i] = floatPtr[i];
+                    }
                 }
             }
         }

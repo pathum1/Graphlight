@@ -171,7 +171,16 @@ namespace TaskbarEqualizer.SystemTray
             };
 
             await _overlayWindow.InitializeAsync();
+            
+            // Force window to be visible and on top
             _overlayWindow.Show();
+            _overlayWindow.BringToFront();
+            _overlayWindow.Activate();
+            
+            // Ensure it stays on top
+            NativeMethods.SetWindowPos(_overlayWindow.Handle, NativeMethods.HWND_TOPMOST, 
+                overlayBounds.X, overlayBounds.Y, overlayBounds.Width, overlayBounds.Height, 
+                NativeMethods.SWP_SHOWWINDOW);
 
             _logger.LogDebug("Overlay window created at {Bounds}", overlayBounds);
         }
@@ -222,7 +231,18 @@ namespace TaskbarEqualizer.SystemTray
                 var spectrumData = _latestSpectrumData;
                 if (spectrumData != null)
                 {
-                    _overlayWindow.UpdateVisualization(spectrumData);
+                    // Use async task to avoid blocking the timer thread
+                    Task.Run(() =>
+                    {
+                        try
+                        {
+                            _overlayWindow.UpdateVisualization(spectrumData);
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning(ex, "Error updating visualization");
+                        }
+                    });
                 }
             }
             catch (Exception ex)
@@ -308,8 +328,12 @@ namespace TaskbarEqualizer.SystemTray
         private float[] _peakHolds = new float[32];
         private DateTime[] _lastPeakTimes = new DateTime[32];
         private DateTime _lastAudioTime = DateTime.Now;
-        private readonly float _decayRate = 0.92f; // How fast bars fall down
-        private readonly float _smoothingFactor = 0.4f; // Less smoothing for more responsiveness
+        private readonly float _decayRate = 0.85f; // Faster decay - bars fall down quicker
+        private readonly float _smoothingFactor = 0.1f; // Minimal smoothing for maximum responsiveness
+        
+        // Dragging support
+        private bool _isDragging = false;
+        private Point _lastMousePos;
 
         public OverlayWindow(ILogger logger, IIconRenderer iconRenderer, OverlayConfiguration configuration)
         {
@@ -322,31 +346,39 @@ namespace TaskbarEqualizer.SystemTray
 
         private void SetupWindow()
         {
-            // Make window transparent and always on top but NOT click-through to avoid suspension appearance
+            // Make window transparent and always on top
             FormBorderStyle = FormBorderStyle.None;
             WindowState = FormWindowState.Normal;
             TopMost = true;
-            ShowInTaskbar = true; // Show in taskbar so it's clearly visible and active
+            ShowInTaskbar = false; // Hide from taskbar to keep it as overlay only
             ControlBox = false;
             MaximizeBox = false;
             MinimizeBox = false;
             StartPosition = FormStartPosition.Manual;
+            Visible = true; // Ensure it's visible
 
-            // Enable double buffering
+            // Enable double buffering and mouse events
             SetStyle(ControlStyles.AllPaintingInWmPaint | 
                      ControlStyles.UserPaint | 
                      ControlStyles.DoubleBuffer | 
                      ControlStyles.ResizeRedraw, true);
+            
+            // Enable mouse events for dragging
+            SetStyle(ControlStyles.UserMouse, true);
 
-            // Set transparency but with a less transparent background
-            BackColor = Color.FromArgb(20, 20, 20); // Dark background instead of transparent
-            Opacity = Math.Max(0.8, _configuration.Opacity); // More opaque to be clearly visible
+            // Set transparency for true overlay effect
+            BackColor = Color.Magenta; // Use magenta as transparency key
+            TransparencyKey = Color.Magenta; // Make magenta transparent
+            Opacity = 1.0; // Full opacity for the bars themselves
 
-            // Make window layered but NOT click-through - this prevents the suspension appearance
-            var exStyle = NativeMethods.GetWindowLong(Handle, NativeMethods.GWL_EXSTYLE);
-            exStyle |= NativeMethods.WS_EX_LAYERED;
-            // Removed WS_EX_TRANSPARENT to prevent suspension appearance
-            NativeMethods.SetWindowLong(Handle, NativeMethods.GWL_EXSTYLE, exStyle);
+            // Make window layered but allow interaction for dragging
+            if (Handle != IntPtr.Zero)
+            {
+                var exStyle = NativeMethods.GetWindowLong(Handle, NativeMethods.GWL_EXSTYLE);
+                exStyle |= NativeMethods.WS_EX_LAYERED | NativeMethods.WS_EX_TOPMOST;
+                // Removed WS_EX_TRANSPARENT to allow mouse interaction for dragging
+                NativeMethods.SetWindowLong(Handle, NativeMethods.GWL_EXSTYLE, exStyle);
+            }
         }
 
         public async Task InitializeAsync()
@@ -379,9 +411,18 @@ namespace TaskbarEqualizer.SystemTray
                 {
                     var newValue = (float)spectrumData.Spectrum[i];
                     
-                    // Apply smoothing for responsiveness
-                    _smoothedSpectrum[i] = _smoothedSpectrum[i] * _smoothingFactor + 
-                                          newValue * (1f - _smoothingFactor);
+                    // For bars to fall properly, use immediate response for decreases
+                    if (newValue > _smoothedSpectrum[i])
+                    {
+                        // Rising: use minimal smoothing
+                        _smoothedSpectrum[i] = _smoothedSpectrum[i] * _smoothingFactor + 
+                                              newValue * (1f - _smoothingFactor);
+                    }
+                    else
+                    {
+                        // Falling: use immediate response with decay
+                        _smoothedSpectrum[i] = Math.Max(newValue, _smoothedSpectrum[i] * 0.8f);
+                    }
                     
                     // Peak hold logic
                     if (_smoothedSpectrum[i] > _peakHolds[i])
@@ -391,10 +432,10 @@ namespace TaskbarEqualizer.SystemTray
                     }
                     else
                     {
-                        // Decay peak holds after 1 second
-                        if ((now - _lastPeakTimes[i]).TotalMilliseconds > 1000)
+                        // Decay peak holds after 500ms
+                        if ((now - _lastPeakTimes[i]).TotalMilliseconds > 500)
                         {
-                            _peakHolds[i] *= 0.95f;
+                            _peakHolds[i] *= 0.9f;
                         }
                     }
                 }
@@ -415,15 +456,40 @@ namespace TaskbarEqualizer.SystemTray
         {
             try
             {
-                // Apply decay when no recent audio
+                // Apply continuous decay for natural falling effect
                 var timeSinceLastAudio = (DateTime.Now - _lastAudioTime).TotalMilliseconds;
-                if (timeSinceLastAudio > 100) // 100ms grace period
+                
+                // Apply decay only when needed to prevent flickering
+                bool hasAudio = timeSinceLastAudio < 100;
+                bool hasSignificantLevel = false;
+                
+                for (int i = 0; i < _smoothedSpectrum.Length; i++)
                 {
-                    for (int i = 0; i < _smoothedSpectrum.Length; i++)
+                    // Check if there's any significant signal
+                    if (_smoothedSpectrum[i] > 0.001f || _peakHolds[i] > 0.001f)
+                        hasSignificantLevel = true;
+                        
+                    // Only decay when there's something to decay
+                    if (_smoothedSpectrum[i] > 0.001f)
                     {
-                        _smoothedSpectrum[i] *= _decayRate;
-                        _peakHolds[i] *= 0.98f; // Slower decay for peaks
+                        _smoothedSpectrum[i] = Math.Max(0, _smoothedSpectrum[i] * _decayRate);
+                        // Set to zero when very small to prevent flickering
+                        if (_smoothedSpectrum[i] < 0.001f) _smoothedSpectrum[i] = 0;
                     }
+                    
+                    // Peak decay
+                    if (_peakHolds[i] > 0.001f && timeSinceLastAudio > 50)
+                    {
+                        _peakHolds[i] = Math.Max(0, _peakHolds[i] * 0.95f);
+                        if (_peakHolds[i] < 0.001f) _peakHolds[i] = 0;
+                    }
+                }
+                
+                // Stop repainting when no significant activity
+                if (!hasAudio && !hasSignificantLevel && timeSinceLastAudio > 2000)
+                {
+                    // No need to keep repainting
+                    return;
                 }
                 
                 // Render visualization directly to the overlay window
@@ -433,14 +499,14 @@ namespace TaskbarEqualizer.SystemTray
                     e.Graphics.DrawImage(bitmap, 0, 0);
                 }
                 
-                // Schedule next repaint for decay animation
-                if (timeSinceLastAudio < 5000) // Continue for 5 seconds after audio stops
-                {
-                    BeginInvoke(new Action(() => {
-                        System.Threading.Thread.Sleep(33); // ~30 FPS
+                // Schedule next repaint for smooth animation
+                BeginInvoke(new Action(async () => {
+                    await Task.Delay(16); // ~60 FPS for smooth animation
+                    if (!IsDisposed)
+                    {
                         Invalidate();
-                    }));
-                }
+                    }
+                }));
             }
             catch (Exception ex)
             {
@@ -533,15 +599,61 @@ namespace TaskbarEqualizer.SystemTray
             
             return ValueTask.CompletedTask;
         }
+        
+        // Mouse handling for dragging
+        protected override void OnMouseDown(MouseEventArgs e)
+        {
+            if (e.Button == MouseButtons.Left)
+            {
+                _isDragging = true;
+                _lastMousePos = e.Location;
+                Cursor = Cursors.SizeAll;
+            }
+            base.OnMouseDown(e);
+        }
+        
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            if (_isDragging && e.Button == MouseButtons.Left)
+            {
+                var deltaX = e.Location.X - _lastMousePos.X;
+                var deltaY = e.Location.Y - _lastMousePos.Y;
+                Location = new Point(Location.X + deltaX, Location.Y + deltaY);
+            }
+            base.OnMouseMove(e);
+        }
+        
+        protected override void OnMouseUp(MouseEventArgs e)
+        {
+            if (e.Button == MouseButtons.Left)
+            {
+                _isDragging = false;
+                Cursor = Cursors.Default;
+            }
+            base.OnMouseUp(e);
+        }
+        
+        protected override void OnMouseEnter(EventArgs e)
+        {
+            Cursor = Cursors.SizeAll; // Show it's draggable
+            base.OnMouseEnter(e);
+        }
+        
+        protected override void OnMouseLeave(EventArgs e)
+        {
+            if (!_isDragging)
+                Cursor = Cursors.Default;
+            base.OnMouseLeave(e);
+        }
 
         protected override CreateParams CreateParams
         {
             get
             {
                 var cp = base.CreateParams;
-                // Make window layered but NOT transparent to clicks to avoid suspension appearance
-                cp.ExStyle |= NativeMethods.WS_EX_LAYERED;
-                // Removed WS_EX_TRANSPARENT to prevent suspension appearance
+                // Make window layered but allow interaction for dragging
+                cp.ExStyle |= NativeMethods.WS_EX_LAYERED | NativeMethods.WS_EX_TOPMOST;
+                // Removed WS_EX_TRANSPARENT to allow mouse interaction
                 return cp;
             }
         }
@@ -555,6 +667,7 @@ namespace TaskbarEqualizer.SystemTray
         public const int GWL_EXSTYLE = -20;
         public const int WS_EX_LAYERED = 0x00080000;
         public const int WS_EX_TRANSPARENT = 0x00000020;
+        public const int WS_EX_TOPMOST = 0x00000008;
 
         [DllImport("user32.dll")]
         public static extern IntPtr FindWindow(string lpClassName, string? lpWindowName);
@@ -567,6 +680,12 @@ namespace TaskbarEqualizer.SystemTray
 
         [DllImport("user32.dll")]
         public static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
+
+        [DllImport("user32.dll")]
+        public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint uFlags);
+
+        public static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
+        public const uint SWP_SHOWWINDOW = 0x0040;
 
         [StructLayout(LayoutKind.Sequential)]
         public struct RECT

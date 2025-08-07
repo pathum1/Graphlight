@@ -18,6 +18,10 @@ namespace TaskbarEqualizer.Main
         private Timer? _refreshTimer;
         private float[] _smoothedSpectrum = new float[32];
         private readonly float _smoothingFactor = 0.7f;
+        
+        // For dragging the borderless window
+        private bool _isDragging = false;
+        private Point _dragStartPoint;
 
         public SpectrumAnalyzerWindow(ILogger<SpectrumAnalyzerWindow> logger)
         {
@@ -38,6 +42,15 @@ namespace TaskbarEqualizer.Main
             StartPosition = FormStartPosition.CenterScreen;
             MinimumSize = new Size(400, 200);
             BackColor = Color.Black;
+            
+            // Remove all borders and visual indicators
+            FormBorderStyle = FormBorderStyle.None;
+            
+            // Remove resize handles and selection borders
+            MaximizeBox = false;
+            MinimizeBox = false;
+            ShowIcon = false;
+            ControlBox = false;
             
             // Enable double buffering for smooth animation
             SetStyle(ControlStyles.AllPaintingInWmPaint | 
@@ -66,6 +79,11 @@ namespace TaskbarEqualizer.Main
             // Handle resize
             Resize += SpectrumAnalyzerWindow_Resize;
             
+            // Handle mouse events for dragging the borderless window
+            MouseDown += SpectrumAnalyzerWindow_MouseDown;
+            MouseMove += SpectrumAnalyzerWindow_MouseMove;
+            MouseUp += SpectrumAnalyzerWindow_MouseUp;
+            
             _logger.LogInformation("Spectrum analyzer window initialized");
         }
 
@@ -88,6 +106,34 @@ namespace TaskbarEqualizer.Main
                 Hide();
                 ShowInTaskbar = false;
                 _logger.LogInformation("Window minimized to system tray");
+            }
+        }
+
+        private void SpectrumAnalyzerWindow_MouseDown(object? sender, MouseEventArgs e)
+        {
+            if (e.Button == MouseButtons.Left)
+            {
+                _isDragging = true;
+                _dragStartPoint = new Point(e.X, e.Y);
+            }
+        }
+
+        private void SpectrumAnalyzerWindow_MouseMove(object? sender, MouseEventArgs e)
+        {
+            if (_isDragging)
+            {
+                var newLocation = new Point(
+                    Location.X + e.X - _dragStartPoint.X,
+                    Location.Y + e.Y - _dragStartPoint.Y);
+                Location = newLocation;
+            }
+        }
+
+        private void SpectrumAnalyzerWindow_MouseUp(object? sender, MouseEventArgs e)
+        {
+            if (e.Button == MouseButtons.Left)
+            {
+                _isDragging = false;
             }
         }
 
@@ -136,6 +182,21 @@ namespace TaskbarEqualizer.Main
                     _smoothedSpectrum[i] = _smoothedSpectrum[i] * _smoothingFactor + 
                                          (float)spectrumData.Spectrum[i] * (1f - _smoothingFactor);
                 }
+            }
+        }
+
+        protected override CreateParams CreateParams
+        {
+            get
+            {
+                CreateParams cp = base.CreateParams;
+                // Remove all window decorations and borders at the Windows level
+                cp.Style &= ~0x00C00000; // Remove WS_CAPTION
+                cp.Style &= ~0x00800000; // Remove WS_BORDER
+                cp.Style &= ~0x00400000; // Remove WS_DLGFRAME
+                cp.ExStyle &= ~0x00000200; // Remove WS_EX_CLIENTEDGE
+                cp.ExStyle &= ~0x00000001; // Remove WS_EX_DLGMODALFRAME
+                return cp;
             }
         }
 

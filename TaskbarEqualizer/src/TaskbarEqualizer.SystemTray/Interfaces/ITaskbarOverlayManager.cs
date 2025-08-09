@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using TaskbarEqualizer.Core.Interfaces;
@@ -181,6 +182,11 @@ namespace TaskbarEqualizer.SystemTray.Interfaces
         /// Rendering configuration for the visualization.
         /// </summary>
         public RenderConfiguration RenderConfiguration { get; set; } = new();
+
+        /// <summary>
+        /// Custom settings dictionary for extended configuration options.
+        /// </summary>
+        public Dictionary<string, object> CustomSettings { get; set; } = new();
     }
 
     /// <summary>

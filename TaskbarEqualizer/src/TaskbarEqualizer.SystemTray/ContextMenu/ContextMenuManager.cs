@@ -462,7 +462,22 @@ namespace TaskbarEqualizer.SystemTray.ContextMenu
 
         private void SetupDefaultMenuItems()
         {
-            // Add default menu items
+            // Show/Hide Analyzer menu items
+            var showAnalyzerItem = ContextMenuItem.CreateStandard(
+                "show_analyzer",
+                "Show Analyzer",
+                item => OnShowAnalyzerClicked(item)
+            );
+
+            var hideAnalyzerItem = ContextMenuItem.CreateStandard(
+                "hide_analyzer", 
+                "Hide Analyzer",
+                item => OnHideAnalyzerClicked(item)
+            );
+
+            var separator1Item = ContextMenuItem.CreateSeparator("separator1");
+
+            // Settings menu item with icon
             var settingsItem = ContextMenuItem.CreateWithIcon(
                 "settings", 
                 "Settings...", 
@@ -470,21 +485,27 @@ namespace TaskbarEqualizer.SystemTray.ContextMenu
                 item => OnSettingsClicked(item)
             ).WithShortcut(Keys.Control | Keys.S);
 
-            var separatorItem = ContextMenuItem.CreateSeparator("separator1");
+            var separator2Item = ContextMenuItem.CreateSeparator("separator2");
 
+            // About menu item
             var aboutItem = ContextMenuItem.CreateStandard(
                 "about", 
                 "About TaskbarEqualizer", 
                 item => OnAboutClicked(item)
             );
 
+            // Exit menu item
             var exitItem = ContextMenuItem.CreateStandard(
                 "exit", 
                 "Exit", 
                 item => OnExitClicked(item)
             ).WithShortcut(Keys.Alt | Keys.F4);
 
-            _menuItems.AddRange(new[] { settingsItem, separatorItem, aboutItem, exitItem });
+            _menuItems.AddRange(new[] { 
+                showAnalyzerItem, hideAnalyzerItem, separator1Item,
+                settingsItem, separator2Item, 
+                aboutItem, exitItem 
+            });
 
             // Add items to the menu strip
             if (_contextMenu != null)
@@ -658,10 +679,28 @@ namespace TaskbarEqualizer.SystemTray.ContextMenu
             }
         }
 
+        private void OnShowAnalyzerClicked(IContextMenuItem menuItem)
+        {
+            _logger.LogInformation("Show Analyzer menu item clicked");
+            // Notify through event system that overlay should be shown
+            var showEvent = new MenuItemClickedEventArgs(menuItem, MouseButtons.Left, Cursor.Position);
+            MenuItemClicked?.Invoke(this, showEvent);
+        }
+
+        private void OnHideAnalyzerClicked(IContextMenuItem menuItem)
+        {
+            _logger.LogInformation("Hide Analyzer menu item clicked");
+            // Notify through event system that overlay should be hidden
+            var hideEvent = new MenuItemClickedEventArgs(menuItem, MouseButtons.Left, Cursor.Position);
+            MenuItemClicked?.Invoke(this, hideEvent);
+        }
+
         private void OnSettingsClicked(IContextMenuItem menuItem)
         {
             _logger.LogInformation("Settings menu item clicked");
-            // Settings dialog will be implemented later
+            // Notify through event system that settings should be shown
+            var settingsEvent = new MenuItemClickedEventArgs(menuItem, MouseButtons.Left, Cursor.Position);
+            MenuItemClicked?.Invoke(this, settingsEvent);
         }
 
         private void OnAboutClicked(IContextMenuItem menuItem)
@@ -669,7 +708,14 @@ namespace TaskbarEqualizer.SystemTray.ContextMenu
             _logger.LogInformation("About menu item clicked");
             
             MessageBox.Show(
-                "TaskbarEqualizer v1.0\nReal-time audio visualization for Windows 11 taskbar\n\n© 2024 TaskbarEqualizer",
+                "TaskbarEqualizer v1.0\nReal-time audio visualization for Windows 11 taskbar\n\n" +
+                "Features:\n" +
+                "• Real-time spectrum analysis\n" +
+                "• Customizable color gradients\n" +
+                "• Segmented and solid bar styles\n" +
+                "• Draggable and resizable overlay\n" +
+                "• Windows 11 styled interface\n\n" +
+                "© 2024 TaskbarEqualizer",
                 "About TaskbarEqualizer",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Information

@@ -27,7 +27,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\TaskbarEqualizer.Core\TaskbarEqualizer.Core.csproj" />
-    <ProjectReference Include="..\TaskbarEqualizer.SystemTray\TaskbarEqualizer.SystemTray.csproj" />
   </ItemGroup>
 
   <ItemGroup>

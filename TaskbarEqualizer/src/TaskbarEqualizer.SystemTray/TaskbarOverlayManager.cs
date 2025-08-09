@@ -548,20 +548,34 @@ namespace TaskbarEqualizer.SystemTray
             var barWidth = (float)availableWidth / barCount;
             var maxHeight = size.Height - 8; // Leave space for drag area
             
-            // Border made transparent - functionality remains
-            // using (var borderPen = new Pen(Color.FromArgb(0, 255, 255, 255), 1))
-            // {
-            //     graphics.DrawRectangle(borderPen, 0, 0, size.Width - 1, size.Height - 1);
-            // }
-            
-            // Drag area made transparent - dragging still works via mouse events
-            // using (var dragBrush = new SolidBrush(Color.FromArgb(0, 255, 255, 255)))
-            // {
-            //     graphics.FillRectangle(dragBrush, 0, 0, size.Width, 4);
-            // }
-
             DrawResizeIndicators(graphics, size, 8); // Show subtle resize grip
 
+            // Check if segmented bars are enabled via configuration
+            bool useSegmentedBars = _configuration?.CustomSettings?.ContainsKey("UseSegmentedBars") == true && 
+                                   (bool)_configuration.CustomSettings["UseSegmentedBars"];
+            
+            if (useSegmentedBars)
+            {
+                RenderSegmentedBars(graphics, size, barCount, availableWidth, barWidth, maxHeight);
+            }
+            else
+            {
+                RenderSolidBars(graphics, size, barCount, availableWidth, barWidth, maxHeight);
+            }
+            
+            // Small visible drag handle for better UX
+            using (var dotBrush = new SolidBrush(Color.FromArgb(64, 255, 255, 255))) // Semi-transparent
+            {
+                var centerX = size.Width / 2;
+                graphics.FillEllipse(dotBrush, centerX - 6, 1, 2, 2);
+                graphics.FillEllipse(dotBrush, centerX - 2, 1, 2, 2);
+                graphics.FillEllipse(dotBrush, centerX + 2, 1, 2, 2);
+                graphics.FillEllipse(dotBrush, centerX + 6, 1, 2, 2);
+            }
+        }
+
+        private void RenderSolidBars(Graphics graphics, Size size, int barCount, int availableWidth, float barWidth, int maxHeight)
+        {
             // Create gradient brush from green to red
             using var gradientBrush = new LinearGradientBrush(
                 new Rectangle(2, 4, availableWidth, maxHeight),
@@ -584,15 +598,68 @@ namespace TaskbarEqualizer.SystemTray
                     graphics.FillRectangle(gradientBrush, x, y, width, barHeight);
                 }
             }
-            
-            // Small visible drag handle for better UX
-            using (var dotBrush = new SolidBrush(Color.FromArgb(64, 255, 255, 255))) // Semi-transparent
+        }
+
+        private void RenderSegmentedBars(Graphics graphics, Size size, int barCount, int availableWidth, float barWidth, int maxHeight)
+        {
+            // Get segment settings from configuration
+            int segmentHeight = _configuration?.CustomSettings?.ContainsKey("SegmentHeight") == true ? 
+                               (int)_configuration.CustomSettings["SegmentHeight"] : 5;
+            int segmentGap = _configuration?.CustomSettings?.ContainsKey("SegmentGap") == true ? 
+                            (int)_configuration.CustomSettings["SegmentGap"] : 1;
+
+            // Draw segmented bars
+            for (int i = 0; i < barCount; i++)
             {
-                var centerX = size.Width / 2;
-                graphics.FillEllipse(dotBrush, centerX - 6, 1, 2, 2);
-                graphics.FillEllipse(dotBrush, centerX - 2, 1, 2, 2);
-                graphics.FillEllipse(dotBrush, centerX + 2, 1, 2, 2);
-                graphics.FillEllipse(dotBrush, centerX + 6, 1, 2, 2);
+                var level = Math.Max(0, Math.Min(1, _smoothedSpectrum[i]));
+                var barHeight = Math.Max(0, (int)(level * maxHeight));
+                var x = 2 + i * barWidth; // Start at 2px margin
+                var width = Math.Max(1, barWidth - 0.5f); // Small gap between bars
+
+                // Calculate how many segments to draw
+                int segmentsToDraw = barHeight / (segmentHeight + segmentGap);
+                
+                // Start from bottom and work up
+                float currentY = size.Height - 2 - segmentHeight;
+
+                for (int seg = 0; seg < segmentsToDraw; seg++)
+                {
+                    if (currentY < 4) break; // Don't draw into drag area
+
+                    // Calculate color based on height for VU meter effect
+                    float heightRatio = (float)(seg + 1) / (maxHeight / (segmentHeight + segmentGap));
+                    Color segmentColor = GetBarColor(heightRatio);
+                    
+                    using (var brush = new SolidBrush(segmentColor))
+                    {
+                        graphics.FillRectangle(brush, x, currentY, width, segmentHeight);
+                    }
+                    
+                    currentY -= (segmentHeight + segmentGap);
+                }
+            }
+        }
+
+        private Color GetBarColor(float level)
+        {
+            // Create color ramp from green (0) to yellow (0.7) to red (1.0)
+            if (level < 0.7f)
+            {
+                // Green to Yellow transition
+                float ratio = level / 0.7f;
+                int red = (int)(ratio * 255);
+                int green = 255;
+                int blue = 0;
+                return Color.FromArgb(red, green, blue);
+            }
+            else
+            {
+                // Yellow to Red transition
+                float ratio = (level - 0.7f) / 0.3f;
+                int red = 255;
+                int green = (int)((1 - ratio) * 255);
+                int blue = 0;
+                return Color.FromArgb(red, green, blue);
             }
         }
         

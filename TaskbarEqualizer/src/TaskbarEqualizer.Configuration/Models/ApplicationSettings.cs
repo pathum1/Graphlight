@@ -5,7 +5,6 @@ using System.Drawing;
 using System.Runtime.CompilerServices;
 using System.Text.Json.Serialization;
 using System.Windows.Forms;
-using TaskbarEqualizer.SystemTray.Interfaces;
 
 namespace TaskbarEqualizer.Configuration
 {
@@ -636,6 +635,100 @@ namespace TaskbarEqualizer.Configuration
         }
 
         #endregion
+    }
+
+    /// <summary>
+    /// Available icon sizes for rendering.
+    /// </summary>
+    public enum IconSize
+    {
+        /// <summary>
+        /// 16x16 pixels - minimal detail, 2-4 frequency bands.
+        /// </summary>
+        Small = 16,
+
+        /// <summary>
+        /// 24x24 pixels - balanced detail, 6-8 frequency bands.
+        /// </summary>
+        Medium = 24,
+
+        /// <summary>
+        /// 32x32 pixels - standard detail, 12-16 frequency bands.
+        /// </summary>
+        Large = 32,
+
+        /// <summary>
+        /// 48x48 pixels - high detail, full frequency spectrum.
+        /// </summary>
+        ExtraLarge = 48
+    }
+
+    /// <summary>
+    /// Equalizer visualization styles.
+    /// </summary>
+    public enum EqualizerStyle
+    {
+        /// <summary>
+        /// Traditional vertical bars.
+        /// </summary>
+        Bars,
+
+        /// <summary>
+        /// Circular dots visualization.
+        /// </summary>
+        Dots,
+
+        /// <summary>
+        /// Waveform representation.
+        /// </summary>
+        Waveform,
+
+        /// <summary>
+        /// Spectrum analyzer style.
+        /// </summary>
+        Spectrum,
+
+        /// <summary>
+        /// Minimalist line visualization.
+        /// </summary>
+        Lines
+    }
+
+    /// <summary>
+    /// Rendering quality levels.
+    /// </summary>
+    public enum RenderQuality
+    {
+        /// <summary>
+        /// Low quality - fastest rendering, minimal effects.
+        /// </summary>
+        Low,
+
+        /// <summary>
+        /// Medium quality - balanced performance and visual quality.
+        /// </summary>
+        Medium,
+
+        /// <summary>
+        /// High quality - best visual quality, slower rendering.
+        /// </summary>
+        High,
+
+        /// <summary>
+        /// Ultra quality - maximum visual fidelity, requires powerful hardware.
+        /// </summary>
+        Ultra
+    }
+
+    /// <summary>
+    /// Gradient directions for visual effects.
+    /// </summary>
+    public enum GradientDirection
+    {
+        Horizontal,
+        Vertical,
+        Diagonal,
+        Radial
     }
 
     /// <summary>

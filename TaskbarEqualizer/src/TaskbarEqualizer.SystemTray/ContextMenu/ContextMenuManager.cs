@@ -463,6 +463,13 @@ namespace TaskbarEqualizer.SystemTray.ContextMenu
         private void SetupDefaultMenuItems()
         {
             // Add default menu items
+            var autoStartItem = ContextMenuItem.CreateCheckbox(
+                "autostart",
+                "Start with Windows",
+                false, // Initial state - will be updated by orchestrator
+                item => OnAutoStartToggled(item)
+            );
+
             var settingsItem = ContextMenuItem.CreateWithIcon(
                 "settings", 
                 "Settings...", 
@@ -470,7 +477,7 @@ namespace TaskbarEqualizer.SystemTray.ContextMenu
                 item => OnSettingsClicked(item)
             ).WithShortcut(Keys.Control | Keys.S);
 
-            var separatorItem = ContextMenuItem.CreateSeparator("separator1");
+            var separatorItem1 = ContextMenuItem.CreateSeparator("separator1");
 
             var aboutItem = ContextMenuItem.CreateStandard(
                 "about", 
@@ -478,13 +485,15 @@ namespace TaskbarEqualizer.SystemTray.ContextMenu
                 item => OnAboutClicked(item)
             );
 
+            var separatorItem2 = ContextMenuItem.CreateSeparator("separator2");
+
             var exitItem = ContextMenuItem.CreateStandard(
                 "exit", 
                 "Exit", 
                 item => OnExitClicked(item)
             ).WithShortcut(Keys.Alt | Keys.F4);
 
-            _menuItems.AddRange(new[] { settingsItem, separatorItem, aboutItem, exitItem });
+            _menuItems.AddRange(new[] { autoStartItem, separatorItem1, settingsItem, separatorItem2, aboutItem, exitItem });
 
             // Add items to the menu strip
             if (_contextMenu != null)
@@ -656,6 +665,12 @@ namespace TaskbarEqualizer.SystemTray.ContextMenu
 
                 _logger.LogDebug("Menu item clicked: {Id} - {Text}", menuItem.Id, menuItem.Text);
             }
+        }
+
+        private void OnAutoStartToggled(IContextMenuItem menuItem)
+        {
+            _logger.LogInformation("Auto-start toggle menu item clicked - new state: {Checked}", menuItem.Checked);
+            // The actual auto-start logic is handled by ApplicationOrchestrator through MenuItemClicked event
         }
 
         private void OnSettingsClicked(IContextMenuItem menuItem)

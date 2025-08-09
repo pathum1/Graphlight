@@ -1,6 +1,7 @@
 using System;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Windows.Forms;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using TaskbarEqualizer.Configuration.Interfaces;
@@ -106,11 +107,8 @@ namespace TaskbarEqualizer.Configuration.Services
 
             try
             {
-                // Initialize all components in sequence
+                // Initialize all components in sequence (event handlers set up inside)
                 await InitializeComponentsAsync(stoppingToken);
-
-                // Setup event handlers and cross-component communication
-                SetupEventHandlers();
 
                 // Validate auto-start configuration
                 await ValidateAutoStartConfigurationAsync(stoppingToken);
@@ -238,8 +236,9 @@ namespace TaskbarEqualizer.Configuration.Services
             await _taskbarOverlayManager.ShowAsync(cancellationToken);
             _logger.LogDebug("Taskbar overlay shown");
 
-            // 10. Check auto-start status
+            // 10. Check auto-start status and sync with context menu
             var autoStartEnabled = await _autoStartManager.IsAutoStartEnabledAsync(cancellationToken);
+            await _contextMenuManager.SetMenuItemCheckedAsync("autostart", autoStartEnabled, cancellationToken);
             _logger.LogDebug("Auto-start status checked: {Enabled}", autoStartEnabled);
 
             _logger.LogDebug("All Phase 3 components initialized successfully");
@@ -491,6 +490,10 @@ namespace TaskbarEqualizer.Configuration.Services
                     await _settingsManager.SetSetting("StartWithWindows", e.IsEnabled);
                     _logger.LogDebug("Updated StartWithWindows setting to match auto-start status");
                 }
+
+                // Sync context menu item state
+                await _contextMenuManager.SetMenuItemCheckedAsync("autostart", e.IsEnabled);
+                _logger.LogDebug("Updated context menu auto-start item to match status");
             }
             catch (Exception ex)
             {
@@ -563,9 +566,11 @@ namespace TaskbarEqualizer.Configuration.Services
                     _logger.LogDebug("Saved pending settings before exit");
                 }
 
-                // In Phase 4, this would trigger application shutdown
-                // For now, just log the request
-                _logger.LogInformation("Exit request processed successfully");
+                // Trigger application shutdown
+                _logger.LogInformation("Initiating application shutdown...");
+                
+                // Use Application.Exit() to properly close the Windows Forms message loop
+                Application.Exit();
             }
             catch (Exception ex)
             {

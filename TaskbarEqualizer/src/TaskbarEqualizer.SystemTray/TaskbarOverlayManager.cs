@@ -543,7 +543,7 @@ namespace TaskbarEqualizer.SystemTray
             //     graphics.FillRectangle(dragBrush, 0, 0, size.Width, 4);
             // }
 
-            // DrawResizeIndicators(graphics, size, resizeMargin); // Commented out - resize still works via mouse detection
+            DrawResizeIndicators(graphics, size, 8); // Show subtle resize grip
 
             // Create gradient brush from green to red
             using var gradientBrush = new LinearGradientBrush(
@@ -568,20 +568,34 @@ namespace TaskbarEqualizer.SystemTray
                 }
             }
             
-            // Drag dots made transparent - visual indicator removed but dragging still works
-            // using (var dotBrush = new SolidBrush(Color.FromArgb(0, 255, 255, 255)))
-            // {
-            //     var centerX = size.Width / 2;
-            //     graphics.FillEllipse(dotBrush, centerX - 4, 1, 2, 2);
-            //     graphics.FillEllipse(dotBrush, centerX, 1, 2, 2);
-            //     graphics.FillEllipse(dotBrush, centerX + 4, 1, 2, 2);
-            // }
+            // Small visible drag handle for better UX
+            using (var dotBrush = new SolidBrush(Color.FromArgb(64, 255, 255, 255))) // Semi-transparent
+            {
+                var centerX = size.Width / 2;
+                graphics.FillEllipse(dotBrush, centerX - 6, 1, 2, 2);
+                graphics.FillEllipse(dotBrush, centerX - 2, 1, 2, 2);
+                graphics.FillEllipse(dotBrush, centerX + 2, 1, 2, 2);
+                graphics.FillEllipse(dotBrush, centerX + 6, 1, 2, 2);
+            }
         }
         
         private void DrawResizeIndicators(Graphics graphics, Size size, int resizeMargin)
         {
-            // Visual indicators removed - resize functionality preserved through mouse event handling
-            return;
+            // Small subtle resize indicator in bottom-right corner
+            using (var resizeBrush = new SolidBrush(Color.FromArgb(48, 255, 255, 255))) // Very subtle
+            {
+                var cornerSize = 6;
+                var x = size.Width - cornerSize - 2;
+                var y = size.Height - cornerSize - 2;
+                
+                // Draw three small diagonal lines as resize grip
+                using (var pen = new Pen(resizeBrush, 1))
+                {
+                    graphics.DrawLine(pen, x + 2, y + cornerSize - 1, x + cornerSize - 1, y + 2);
+                    graphics.DrawLine(pen, x + 4, y + cornerSize - 1, x + cornerSize - 1, y + 4);
+                    graphics.DrawLine(pen, x + 6, y + cornerSize - 1, x + cornerSize - 1, y + 6);
+                }
+            }
         }
 
         public ValueTask DisposeAsync()
@@ -641,15 +655,20 @@ namespace TaskbarEqualizer.SystemTray
         
         protected override void OnMouseMove(MouseEventArgs e)
         {
-            if (_isResizing && e.Button == MouseButtons.Left)
+            // Use Control.MouseButtons instead of e.Button for reliability
+            if (_isResizing && Control.MouseButtons.HasFlag(MouseButtons.Left))
             {
                 HandleResize(e.Location);
+                // Update the last mouse pos so resizing is incremental
+                _lastMousePos = e.Location;
             }
-            else if (_isDragging && e.Button == MouseButtons.Left)
+            else if (_isDragging && Control.MouseButtons.HasFlag(MouseButtons.Left))
             {
                 var deltaX = e.Location.X - _lastMousePos.X;
                 var deltaY = e.Location.Y - _lastMousePos.Y;
                 Location = new Point(Location.X + deltaX, Location.Y + deltaY);
+                // Update the last mouse pos so dragging follows the cursor
+                _lastMousePos = e.Location;
             }
             else
             {
@@ -739,6 +758,8 @@ namespace TaskbarEqualizer.SystemTray
             }
             
             Size = new Size(newWidth, newHeight);
+            // Update the last mouse pos here as well
+            _lastMousePos = mousePos;
         }
         
         private void ShowOverlayContextMenu(Point location)

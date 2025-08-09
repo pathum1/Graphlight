@@ -115,37 +115,54 @@ namespace TaskbarEqualizer.SystemTray.ContextMenu
         /// <inheritdoc />
         public Task ShowMenuAsync(Point location, CancellationToken cancellationToken = default)
         {
+            _logger.LogInformation("🎯 DIAGNOSTIC: ShowMenuAsync called at location {Location}", location);
+
             if (_disposed)
+            {
+                _logger.LogError("🎯 DIAGNOSTIC: ShowMenuAsync called on disposed ContextMenuManager!");
                 throw new ObjectDisposedException(nameof(ContextMenuManager));
+            }
 
             if (!_isInitialized)
+            {
+                _logger.LogError("🎯 DIAGNOSTIC: ShowMenuAsync called on uninitialized ContextMenuManager!");
                 throw new InvalidOperationException("ContextMenuManager must be initialized before showing menu");
+            }
+
+            _logger.LogInformation("🎯 DIAGNOSTIC: ContextMenu state - Disposed: {Disposed}, Initialized: {Initialized}, ContextMenu null: {IsNull}", 
+                _disposed, _isInitialized, _contextMenu == null);
 
             try
             {
                 // Fire showing event
                 var showingArgs = new MenuShowingEventArgs(location);
+                _logger.LogInformation("🎯 DIAGNOSTIC: Firing MenuShowing event with {SubscriberCount} subscribers", 
+                    MenuShowing?.GetInvocationList()?.Length ?? 0);
                 MenuShowing?.Invoke(this, showingArgs);
 
                 if (showingArgs.Cancel)
                 {
-                    _logger.LogDebug("Menu show cancelled by event handler");
+                    _logger.LogWarning("🎯 DIAGNOSTIC: Menu show cancelled by event handler");
                     return Task.CompletedTask;
                 }
 
                 // Ensure we're on the UI thread for showing the context menu
                 if (_contextMenu?.InvokeRequired == true)
                 {
+                    _logger.LogInformation("🎯 DIAGNOSTIC: Context menu InvokeRequired=true, marshalling to UI thread");
                     _contextMenu.Invoke(new Action(() => ShowMenuInternal(location)));
                 }
                 else
                 {
+                    _logger.LogInformation("🎯 DIAGNOSTIC: Context menu InvokeRequired=false, calling ShowMenuInternal directly");
                     ShowMenuInternal(location);
                 }
+
+                _logger.LogInformation("🎯 DIAGNOSTIC: ShowMenuAsync completed successfully");
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to show context menu");
+                _logger.LogError(ex, "🎯 DIAGNOSTIC: Failed to show context menu at {Location}", location);
                 throw;
             }
 
@@ -154,17 +171,29 @@ namespace TaskbarEqualizer.SystemTray.ContextMenu
 
         private void ShowMenuInternal(Point location)
         {
+            _logger.LogInformation("🎯 DIAGNOSTIC: ShowMenuInternal called at {Location}", location);
+            
             lock (_menuLock)
             {
                 if (_contextMenu != null)
                 {
-                    // Set foreground window to ensure proper menu behavior
-                    // This is required on Windows for context menus to work correctly
-                    SetForegroundWindow(GetActiveWindow());
+                    _logger.LogInformation("🎯 DIAGNOSTIC: ContextMenuStrip found, menu items count: {ItemCount}", _contextMenu.Items.Count);
                     
-                    _contextMenu.Show(location);
-                    _isVisible = true;
-                    _logger.LogDebug("Context menu shown at {Location}", location);
+                    try
+                    {
+                        _contextMenu.Show(location);
+                        _isVisible = true;
+                        _logger.LogInformation("🎯 DIAGNOSTIC: ContextMenuStrip.Show() called successfully at {Location}, IsVisible set to true", location);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "🎯 DIAGNOSTIC: Exception in ContextMenuStrip.Show() at {Location}", location);
+                        throw;
+                    }
+                }
+                else
+                {
+                    _logger.LogError("🎯 DIAGNOSTIC: ContextMenuStrip is NULL in ShowMenuInternal!");
                 }
             }
         }
@@ -732,15 +761,6 @@ namespace TaskbarEqualizer.SystemTray.ContextMenu
 
         #endregion
 
-        #region Windows API
-
-        [DllImport("user32.dll")]
-        private static extern bool SetForegroundWindow(IntPtr hWnd);
-
-        [DllImport("user32.dll")]
-        private static extern IntPtr GetActiveWindow();
-
-        #endregion
 
         #region IDisposable Implementation
 

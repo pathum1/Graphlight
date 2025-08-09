@@ -68,12 +68,12 @@ namespace TaskbarEqualizer.Main
                 _contextMenuManager.MenuItemClicked += OnMenuItemClicked;
                 _logger.LogInformation("Context menu events wired up");
 
-                // Set the context menu strip directly on the notify icon for automatic handling
-                if (_contextMenuManager.ContextMenuStrip != null)
-                {
-                    _systemTrayManager.SetContextMenuStrip(_contextMenuManager.ContextMenuStrip);
-                    _logger.LogInformation("Context menu strip assigned to system tray icon");
-                }
+                // Remove this block - it conflicts with manual menu handling
+                // if (_contextMenuManager.ContextMenuStrip != null)
+                // {
+                //     _systemTrayManager.SetContextMenuStrip(_contextMenuManager.ContextMenuStrip);
+                //     _logger.LogInformation("Context menu strip assigned to system tray icon");
+                // }
 
                 // Start the orchestrator after system tray is ready
                 await _orchestrator.StartAsync(default);
@@ -106,15 +106,23 @@ namespace TaskbarEqualizer.Main
         {
             try
             {
-                _logger.LogDebug("Context menu requested at {Location}", e.MenuLocation);
+                _logger.LogInformation("📋 DIAGNOSTIC: ContextMenuRequested event received from {Sender} at {Location}", 
+                    sender?.GetType().Name ?? "null", e.MenuLocation);
+                
                 if (_contextMenuManager != null)
                 {
+                    _logger.LogInformation("📋 DIAGNOSTIC: ContextMenuManager found, calling ShowMenuAsync at {Location}", e.MenuLocation);
                     await _contextMenuManager.ShowMenuAsync(e.MenuLocation);
+                    _logger.LogInformation("📋 DIAGNOSTIC: ShowMenuAsync completed");
+                }
+                else
+                {
+                    _logger.LogError("📋 DIAGNOSTIC: ContextMenuManager is NULL - cannot show menu!");
                 }
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error showing context menu");
+                _logger.LogError(ex, "📋 DIAGNOSTIC: Error showing context menu at {Location}", e.MenuLocation);
             }
         }
 

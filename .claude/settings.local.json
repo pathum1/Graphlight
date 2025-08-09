@@ -31,7 +31,9 @@
       "Bash(dotnet restore:*)",
       "Bash(dir)",
       "Bash(grep:*)",
-      "WebFetch(domain:www.codeproject.com)"
+      "WebFetch(domain:www.codeproject.com)",
+      "Bash(./TaskbarEqualizer.Main.exe)",
+      "Bash(./TaskbarEqualizer.Main.exe --minimized)"
     ],
     "deny": []
   }

@@ -339,7 +339,12 @@ namespace TaskbarEqualizer.SystemTray
         private bool _isResizing = false;
         private ResizeDirection _resizeDirection = ResizeDirection.None;
         private Point _lastMousePos;
-        private Size _originalSize;
+        private Point _resizeStartMousePos;
+        private Size _resizeStartSize;
+        
+        // Performance optimization for dragging
+        private DateTime _lastDragUpdate = DateTime.MinValue;
+        private const int DRAG_UPDATE_INTERVAL_MS = 16; // ~60fps max
         
         private enum ResizeDirection
         {
@@ -389,16 +394,28 @@ namespace TaskbarEqualizer.SystemTray
             TransparencyKey = Color.Magenta; // Make magenta transparent
             Opacity = 1.0; // Full opacity for the bars themselves
 
-            // Add timer for consistent refresh
+            // Add timer for consistent refresh - throttled during drag operations
             _updateTimer = new System.Windows.Forms.Timer();
             _updateTimer.Interval = 16; // 60 FPS
-            _updateTimer.Tick += (s, e) => Invalidate();
+            _updateTimer.Tick += (s, e) => {
+                // Skip repaints during active drag/resize to improve performance
+                if (!_isDragging && !_isResizing)
+                {
+                    Invalidate();
+                }
+            };
             _updateTimer.Start();
             
             // Add timer to ensure window stays on top (check every 2 seconds)
             _topMostTimer = new System.Windows.Forms.Timer();
             _topMostTimer.Interval = 2000; // 2 seconds
-            _topMostTimer.Tick += (s, e) => EnsureTopMost();
+            _topMostTimer.Tick += (s, e) => {
+                // Skip expensive top-most operations during drag/resize
+                if (!_isDragging && !_isResizing)
+                {
+                    EnsureTopMost();
+                }
+            };
             _topMostTimer.Start();
             
             // Force window to stay on top
@@ -635,7 +652,9 @@ namespace TaskbarEqualizer.SystemTray
                 if (_resizeDirection != ResizeDirection.None)
                 {
                     _isResizing = true;
-                    _originalSize = Size;
+                    // Capture the size and mouse position at the start of the resize
+                    _resizeStartSize = Size;
+                    _resizeStartMousePos = e.Location;
                 }
                 else
                 {
@@ -655,24 +674,61 @@ namespace TaskbarEqualizer.SystemTray
         
         protected override void OnMouseMove(MouseEventArgs e)
         {
+            // Throttle updates to prevent UI thread blocking
+            var now = DateTime.Now;
+            if ((now - _lastDragUpdate).TotalMilliseconds < DRAG_UPDATE_INTERVAL_MS)
+            {
+                return; // Skip this update to prevent overwhelming the UI thread
+            }
+            _lastDragUpdate = now;
+            
             // Use Control.MouseButtons instead of e.Button for reliability
             if (_isResizing && Control.MouseButtons.HasFlag(MouseButtons.Left))
             {
-                HandleResize(e.Location);
-                // Update the last mouse pos so resizing is incremental
-                _lastMousePos = e.Location;
+                // Calculate deltas relative to the start of the resize
+                var deltaX = e.Location.X - _resizeStartMousePos.X;
+                var deltaY = e.Location.Y - _resizeStartMousePos.Y;
+
+                int newWidth = Size.Width;
+                int newHeight = Size.Height;
+
+                switch (_resizeDirection)
+                {
+                    case ResizeDirection.Right:
+                        newWidth = Math.Max(MinimumSize.Width,
+                                          Math.Min(MaximumSize.Width, _resizeStartSize.Width + deltaX));
+                        break;
+                    case ResizeDirection.Bottom:
+                        newHeight = Math.Max(MinimumSize.Height,
+                                           Math.Min(MaximumSize.Height, _resizeStartSize.Height + deltaY));
+                        break;
+                    case ResizeDirection.BottomRight:
+                        newWidth = Math.Max(MinimumSize.Width,
+                                          Math.Min(MaximumSize.Width, _resizeStartSize.Width + deltaX));
+                        newHeight = Math.Max(MinimumSize.Height,
+                                           Math.Min(MaximumSize.Height, _resizeStartSize.Height + deltaY));
+                        break;
+                }
+
+                // Use SuspendLayout/ResumeLayout for better performance during resize
+                SuspendLayout();
+                Size = new Size(newWidth, newHeight);
+                ResumeLayout(false);
             }
             else if (_isDragging && Control.MouseButtons.HasFlag(MouseButtons.Left))
             {
                 var deltaX = e.Location.X - _lastMousePos.X;
                 var deltaY = e.Location.Y - _lastMousePos.Y;
-                Location = new Point(Location.X + deltaX, Location.Y + deltaY);
+                
+                // Use SetBounds for more efficient position updates
+                SetBounds(Location.X + deltaX, Location.Y + deltaY, Width, Height, BoundsSpecified.Location);
+                
                 // Update the last mouse pos so dragging follows the cursor
                 _lastMousePos = e.Location;
             }
-            else
+            else if (!_isDragging && !_isResizing)
             {
-                // Update cursor based on mouse position
+                // Only update cursor when not actively dragging/resizing
                 UpdateCursor(e.Location);
             }
             base.OnMouseMove(e);
@@ -686,6 +742,13 @@ namespace TaskbarEqualizer.SystemTray
                 _isResizing = false;
                 _resizeDirection = ResizeDirection.None;
                 Capture = false;
+                
+                // Reset drag throttling timer
+                _lastDragUpdate = DateTime.MinValue;
+                
+                // Force a final update after drag ends to ensure UI is current
+                Invalidate();
+                
                 UpdateCursor(e.Location); // Update cursor after release
             }
             base.OnMouseUp(e);
@@ -731,35 +794,6 @@ namespace TaskbarEqualizer.SystemTray
                 ResizeDirection.BottomRight => Cursors.SizeNWSE,
                 _ => Cursors.SizeAll // Default drag cursor
             };
-        }
-        
-        private void HandleResize(Point mousePos)
-        {
-            var deltaX = mousePos.X - _lastMousePos.X;
-            var deltaY = mousePos.Y - _lastMousePos.Y;
-            
-            var newWidth = Width;
-            var newHeight = Height;
-            
-            switch (_resizeDirection)
-            {
-                case ResizeDirection.Right:
-                    newWidth = Math.Max(MinimumSize.Width, Math.Min(MaximumSize.Width, _originalSize.Width + deltaX));
-                    break;
-                    
-                case ResizeDirection.Bottom:
-                    newHeight = Math.Max(MinimumSize.Height, Math.Min(MaximumSize.Height, _originalSize.Height + deltaY));
-                    break;
-                    
-                case ResizeDirection.BottomRight:
-                    newWidth = Math.Max(MinimumSize.Width, Math.Min(MaximumSize.Width, _originalSize.Width + deltaX));
-                    newHeight = Math.Max(MinimumSize.Height, Math.Min(MaximumSize.Height, _originalSize.Height + deltaY));
-                    break;
-            }
-            
-            Size = new Size(newWidth, newHeight);
-            // Update the last mouse pos here as well
-            _lastMousePos = mousePos;
         }
         
         private void ShowOverlayContextMenu(Point location)

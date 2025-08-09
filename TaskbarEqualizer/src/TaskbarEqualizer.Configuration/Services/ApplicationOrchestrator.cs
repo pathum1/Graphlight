@@ -192,8 +192,9 @@ namespace TaskbarEqualizer.Configuration.Services
                 _logger.LogDebug("Settings loaded by orchestrator");
             }
 
-            // 2. Initialize context menu (no async initialization needed)
-            _logger.LogDebug("Context menu manager ready");
+            // 2. Initialize context menu manager
+            await _contextMenuManager.InitializeAsync(cancellationToken);
+            _logger.LogDebug("Context menu manager initialized");
 
             // 3. Initialize frequency analyzer
             await _frequencyAnalyzer.ConfigureAsync(

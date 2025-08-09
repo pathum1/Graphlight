@@ -28,7 +28,8 @@
       "Bash(start TaskbarEqualizer.Main.exe)",
       "Bash(start:*)",
       "Bash(\"J:\\Graphlight\\TaskbarEqualizer\\src\\TaskbarEqualizer.Main\\bin\\Debug\\net8.0-windows\\TaskbarEqualizer.Main.exe\")",
-      "Bash(dotnet restore:*)"
+      "Bash(dotnet restore:*)",
+      "WebFetch(domain:github.com)"
     ],
     "deny": []
   }

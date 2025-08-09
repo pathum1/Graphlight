@@ -390,9 +390,11 @@ namespace TaskbarEqualizer.SystemTray
             SetStyle(ControlStyles.UserMouse, true);
 
             // Set transparency for true overlay effect
-            BackColor = Color.Magenta; // Use magenta as transparency key
-            TransparencyKey = Color.Magenta; // Make magenta transparent
-            Opacity = 1.0; // Full opacity for the bars themselves
+            // Use dark background that remains visible for debugging/testing
+            // This ensures the window is always visible even without spectrum data
+            BackColor = Color.FromArgb(20, 20, 20); // Very dark gray, but visible
+            TransparencyKey = Color.Empty; // No transparency key - rely on opacity
+            Opacity = 0.8; // Semi-transparent overlay effect
 
             // Add timer for consistent refresh - throttled during drag operations
             _updateTimer = new System.Windows.Forms.Timer();

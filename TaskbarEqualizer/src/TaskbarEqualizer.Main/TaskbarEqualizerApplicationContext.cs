@@ -5,6 +5,7 @@ using System.Windows.Forms;
 using Microsoft.Extensions.Logging;
 using TaskbarEqualizer.Configuration.Services;
 using TaskbarEqualizer.SystemTray.Interfaces;
+using TaskbarEqualizer.SystemTray;
 
 namespace TaskbarEqualizer.Main
 {
@@ -15,6 +16,7 @@ namespace TaskbarEqualizer.Main
     {
         private readonly ISystemTrayManager _systemTrayManager;
         private readonly ApplicationOrchestrator _orchestrator;
+        private readonly TrayMenuIntegration _trayMenuIntegration;
         private readonly ILogger _logger;
         private readonly bool _isMinimized;
         private Timer _initTimer;
@@ -22,11 +24,13 @@ namespace TaskbarEqualizer.Main
         public TaskbarEqualizerApplicationContext(
             ISystemTrayManager systemTrayManager,
             ApplicationOrchestrator orchestrator,
+            TrayMenuIntegration trayMenuIntegration,
             ILogger logger,
             bool isMinimized)
         {
             _systemTrayManager = systemTrayManager ?? throw new ArgumentNullException(nameof(systemTrayManager));
             _orchestrator = orchestrator ?? throw new ArgumentNullException(nameof(orchestrator));
+            _trayMenuIntegration = trayMenuIntegration ?? throw new ArgumentNullException(nameof(trayMenuIntegration));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _isMinimized = isMinimized;
 
@@ -53,6 +57,10 @@ namespace TaskbarEqualizer.Main
                 await _systemTrayManager.ShowAsync();
                 _logger.LogInformation("System tray icon shown");
                 
+                // Initialize tray menu integration to establish spectrum data connection
+                await _trayMenuIntegration.InitializeAsync();
+                _logger.LogInformation("Tray menu integration initialized");
+
                 // Start the orchestrator after system tray is ready
                 await _orchestrator.StartAsync(default);
                 _logger.LogInformation("Application orchestrator started");
@@ -82,6 +90,7 @@ namespace TaskbarEqualizer.Main
             if (disposing)
             {
                 // Clean up resources
+                _trayMenuIntegration?.Dispose();
                 _systemTrayManager?.Dispose();
                 _orchestrator?.Dispose();
             }

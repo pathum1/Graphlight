@@ -5,6 +5,7 @@ using System.Windows.Forms;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using TaskbarEqualizer.Configuration;
+using TaskbarEqualizer.Configuration.Interfaces;
 using TaskbarEqualizer.SystemTray.ContextMenu;
 using TaskbarEqualizer.SystemTray.Forms;
 using TaskbarEqualizer.SystemTray.Interfaces;
@@ -22,9 +23,10 @@ namespace TaskbarEqualizer.SystemTray
         private readonly IContextMenuManager _contextMenuManager;
         private readonly ITaskbarOverlayManager _overlayManager;
         private readonly IServiceProvider _serviceProvider;
-        private readonly ApplicationSettings _applicationSettings;
+        private readonly ISettingsManager _settingsManager;
         
         private bool _disposed = false;
+        private bool _spectrumDataConnected = false;
 
         public TrayMenuIntegration(
             ILogger<TrayMenuIntegration> logger,
@@ -32,14 +34,14 @@ namespace TaskbarEqualizer.SystemTray
             IContextMenuManager contextMenuManager,
             ITaskbarOverlayManager overlayManager,
             IServiceProvider serviceProvider,
-            ApplicationSettings applicationSettings)
+            ISettingsManager settingsManager)
         {
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _systemTrayManager = systemTrayManager ?? throw new ArgumentNullException(nameof(systemTrayManager));
             _contextMenuManager = contextMenuManager ?? throw new ArgumentNullException(nameof(contextMenuManager));
             _overlayManager = overlayManager ?? throw new ArgumentNullException(nameof(overlayManager));
             _serviceProvider = serviceProvider ?? throw new ArgumentNullException(nameof(serviceProvider));
-            _applicationSettings = applicationSettings ?? throw new ArgumentNullException(nameof(applicationSettings));
+            _settingsManager = settingsManager ?? throw new ArgumentNullException(nameof(settingsManager));
         }
 
         /// <summary>
@@ -55,12 +57,32 @@ namespace TaskbarEqualizer.SystemTray
             {
                 _logger.LogInformation("Initializing tray menu integration");
 
+                // Initialize overlay manager with default configuration if not already initialized
+                // Check if overlay manager is not initialized (covers both NotInitialized and uninitialized states)
+                if (_overlayManager.Configuration == null || !_overlayManager.IsActive)
+                {
+                    var overlayConfig = new Interfaces.OverlayConfiguration 
+                    { 
+                        Enabled = true, 
+                        Width = 400, 
+                        Height = 60, 
+                        Opacity = 0.9f,
+                        Position = Interfaces.OverlayPosition.Center,
+                        UpdateFrequency = 60
+                    };
+                    await _overlayManager.InitializeAsync(overlayConfig);
+                    _logger.LogInformation("TaskbarOverlayManager initialized with default configuration");
+                }
+
                 // Initialize context menu manager
                 await _contextMenuManager.InitializeAsync();
 
                 // Wire up event handlers
                 _systemTrayManager.ContextMenuRequested += OnContextMenuRequested;
                 _contextMenuManager.MenuItemClicked += OnMenuItemClicked;
+
+                // Establish spectrum data connection early to ensure it's ready
+                EnsureSpectrumDataConnection();
 
                 _logger.LogInformation("Tray menu integration initialized successfully");
             }
@@ -133,27 +155,97 @@ namespace TaskbarEqualizer.SystemTray
 
         private async Task ShowAnalyzer()
         {
-            _logger.LogInformation("Showing taskbar analyzer overlay");
+            _logger.LogInformation("=== DIAGNOSTIC: ShowAnalyzer called ===");
             
-            if (!_overlayManager.IsActive)
+            // Check if frequency analyzer is running
+            try
             {
-                await _overlayManager.ShowAsync();
-                
-                // Forward spectrum data to the overlay as per guide2.pdf
                 var freqAnalyzer = _serviceProvider.GetRequiredService<TaskbarEqualizer.Core.Interfaces.IFrequencyAnalyzer>();
-                freqAnalyzer.SpectrumDataAvailable += (s, data) => _overlayManager.UpdateVisualization(data);
-                _logger.LogDebug("Frequency analyzer connected to overlay for spectrum data forwarding");
+                _logger.LogInformation("FrequencyAnalyzer.IsAnalyzing: {IsAnalyzing}", freqAnalyzer.IsAnalyzing);
                 
-                // Show notification if enabled
-                if (_applicationSettings.ShowNotifications)
+                // Check if overlay manager is properly configured
+                _logger.LogInformation("OverlayManager.IsActive: {IsActive}", _overlayManager.IsActive);
+                _logger.LogInformation("OverlayManager.Configuration: {Configuration}", _overlayManager.Configuration);
+                
+                if (!_overlayManager.IsActive)
                 {
-                    await _systemTrayManager.ShowBalloonTipAsync(
-                        "TaskbarEqualizer",
-                        "Spectrum analyzer is now visible",
-                        BalloonTipIcon.Info,
-                        3000
-                    );
+                    _logger.LogInformation("Calling ShowAsync on overlay manager...");
+                    await _overlayManager.ShowAsync();
+                    _logger.LogInformation("ShowAsync completed. IsActive now: {IsActive}", _overlayManager.IsActive);
+                    
+                    // Ensure spectrum data connection is established only once
+                    EnsureSpectrumDataConnection();
+                    
+                    // Force a test visualization update to make overlay visible
+                    _logger.LogInformation("Sending test spectrum data to overlay...");
+                    var testSpectrum = new TaskbarEqualizer.Core.Interfaces.SpectrumDataEventArgs(
+                        new double[] { 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8 }, 
+                        8, 0.8, 4, DateTime.Now.Ticks, TimeSpan.Zero, 0.4);
+                    _overlayManager.UpdateVisualization(testSpectrum);
+                    _logger.LogInformation("Test spectrum data sent to overlay");
+                    
+                    // Show notification if enabled
+                    if (_settingsManager.Settings.ShowNotifications)
+                    {
+                        await _systemTrayManager.ShowBalloonTipAsync(
+                            "TaskbarEqualizer",
+                            "Spectrum analyzer is now visible (with test data)",
+                            BalloonTipIcon.Info,
+                            3000
+                        );
+                    }
                 }
+                else
+                {
+                    _logger.LogInformation("Overlay is already active, no action needed");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error in ShowAnalyzer diagnostic analysis");
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Ensures that the spectrum data connection is established between the frequency analyzer and overlay.
+        /// This prevents multiple subscriptions and ensures proper data flow.
+        /// </summary>
+        private void EnsureSpectrumDataConnection()
+        {
+            if (!_spectrumDataConnected)
+            {
+                try
+                {
+                    // Forward spectrum data to the overlay as per guide3.pdf
+                    var freqAnalyzer = _serviceProvider.GetRequiredService<TaskbarEqualizer.Core.Interfaces.IFrequencyAnalyzer>();
+                    freqAnalyzer.SpectrumDataAvailable += OnSpectrumDataAvailable;
+                    _spectrumDataConnected = true;
+                    _logger.LogDebug("Frequency analyzer connected to overlay for spectrum data forwarding");
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Failed to establish spectrum data connection");
+                    throw;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Event handler for spectrum data updates from the frequency analyzer.
+        /// </summary>
+        private void OnSpectrumDataAvailable(object? sender, TaskbarEqualizer.Core.Interfaces.SpectrumDataEventArgs e)
+        {
+            try
+            {
+                if (_overlayManager.IsActive)
+                {
+                    _overlayManager.UpdateVisualization(e);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Error updating overlay visualization with spectrum data");
             }
         }
 
@@ -166,7 +258,7 @@ namespace TaskbarEqualizer.SystemTray
                 await _overlayManager.HideAsync();
                 
                 // Show notification if enabled
-                if (_applicationSettings.ShowNotifications)
+                if (_settingsManager.Settings.ShowNotifications)
                 {
                     await _systemTrayManager.ShowBalloonTipAsync(
                         "TaskbarEqualizer", 
@@ -188,7 +280,7 @@ namespace TaskbarEqualizer.SystemTray
                 var settingsLogger = _serviceProvider.GetRequiredService<ILogger<SettingsWindow>>();
                 
                 // Create and show settings window
-                using var settingsWindow = new SettingsWindow(settingsLogger, _overlayManager, _applicationSettings);
+                using var settingsWindow = new SettingsWindow(settingsLogger, _overlayManager, _settingsManager.Settings);
                 
                 var result = settingsWindow.ShowDialog();
                 
@@ -212,7 +304,7 @@ namespace TaskbarEqualizer.SystemTray
                     }
                     
                     // Show success notification if enabled
-                    if (_applicationSettings.ShowNotifications)
+                    if (_settingsManager.Settings.ShowNotifications)
                     {
                         await _systemTrayManager.ShowBalloonTipAsync(
                             "TaskbarEqualizer",
@@ -275,6 +367,25 @@ namespace TaskbarEqualizer.SystemTray
                     if (_contextMenuManager != null)
                     {
                         _contextMenuManager.MenuItemClicked -= OnMenuItemClicked;
+                    }
+                    
+                    // Disconnect spectrum data if connected
+                    if (_spectrumDataConnected)
+                    {
+                        try
+                        {
+                            var freqAnalyzer = _serviceProvider.GetService<TaskbarEqualizer.Core.Interfaces.IFrequencyAnalyzer>();
+                            if (freqAnalyzer != null)
+                            {
+                                freqAnalyzer.SpectrumDataAvailable -= OnSpectrumDataAvailable;
+                                _spectrumDataConnected = false;
+                                _logger.LogDebug("Disconnected spectrum data event handler");
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning(ex, "Error disconnecting spectrum data event handler");
+                        }
                     }
                     
                     _logger.LogDebug("TrayMenuIntegration disposed");

@@ -139,6 +139,11 @@ namespace TaskbarEqualizer.SystemTray
             {
                 await _overlayManager.ShowAsync();
                 
+                // Forward spectrum data to the overlay as per guide2.pdf
+                var freqAnalyzer = _serviceProvider.GetRequiredService<TaskbarEqualizer.Core.Interfaces.IFrequencyAnalyzer>();
+                freqAnalyzer.SpectrumDataAvailable += (s, data) => _overlayManager.UpdateVisualization(data);
+                _logger.LogDebug("Frequency analyzer connected to overlay for spectrum data forwarding");
+                
                 // Show notification if enabled
                 if (_applicationSettings.ShowNotifications)
                 {

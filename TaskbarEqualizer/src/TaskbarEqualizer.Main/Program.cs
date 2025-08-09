@@ -14,6 +14,7 @@ using TaskbarEqualizer.SystemTray.DependencyInjection;
 using TaskbarEqualizer.Configuration.DependencyInjection;
 using TaskbarEqualizer.Configuration.Services;
 using TaskbarEqualizer.SystemTray.Interfaces;
+using TaskbarEqualizer.SystemTray;
 
 namespace TaskbarEqualizer.Main
 {
@@ -136,6 +137,27 @@ namespace TaskbarEqualizer.Main
                 EmergencyLog("SystemTray service obtained");
                 _orchestrator = _host.Services.GetRequiredService<ApplicationOrchestrator>();
                 EmergencyLog("Orchestrator service obtained");
+                
+                // Initialize TrayMenuIntegration as per guide2.pdf
+                EmergencyLog("Initializing TrayMenuIntegration...");
+                var trayMenuIntegration = _host.Services.GetRequiredService<TrayMenuIntegration>();
+                await trayMenuIntegration.InitializeAsync();
+                EmergencyLog("TrayMenuIntegration initialized successfully");
+                
+                // Initialize TaskbarOverlayManager as per guide2.pdf
+                EmergencyLog("Initializing TaskbarOverlayManager...");
+                var overlayManager = _host.Services.GetRequiredService<ITaskbarOverlayManager>();
+                var overlayConfig = new OverlayConfiguration 
+                { 
+                    Enabled = true, 
+                    Width = 400, 
+                    Height = 60, 
+                    Opacity = 0.9f,
+                    Position = OverlayPosition.Center,
+                    UpdateFrequency = 60
+                };
+                await overlayManager.InitializeAsync(overlayConfig);
+                EmergencyLog("TaskbarOverlayManager initialized successfully");
                 
                 // Test context menu manager
                 try 

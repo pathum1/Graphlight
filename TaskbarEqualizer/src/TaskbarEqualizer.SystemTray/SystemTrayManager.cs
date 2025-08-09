@@ -379,6 +379,25 @@ namespace TaskbarEqualizer.SystemTray
             }
         }
 
+        /// <summary>
+        /// Sets the context menu strip for the tray icon.
+        /// </summary>
+        /// <param name="contextMenuStrip">Context menu strip to assign.</param>
+        public void SetContextMenuStrip(ContextMenuStrip contextMenuStrip)
+        {
+            if (_disposed)
+                throw new ObjectDisposedException(nameof(SystemTrayManager));
+
+            lock (_trayLock)
+            {
+                if (_notifyIcon != null)
+                {
+                    _notifyIcon.ContextMenuStrip = contextMenuStrip;
+                    _logger.LogDebug("Context menu strip assigned to notify icon");
+                }
+            }
+        }
+
         /// <inheritdoc />
         public Point GetTrayIconPosition()
         {

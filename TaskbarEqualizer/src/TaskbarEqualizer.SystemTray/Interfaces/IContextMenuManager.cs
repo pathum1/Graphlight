@@ -39,6 +39,11 @@ namespace TaskbarEqualizer.SystemTray.Interfaces
         IReadOnlyList<IContextMenuItem> MenuItems { get; }
 
         /// <summary>
+        /// Gets the underlying ContextMenuStrip for direct assignment to controls.
+        /// </summary>
+        ContextMenuStrip? ContextMenuStrip { get; }
+
+        /// <summary>
         /// Initializes the context menu manager.
         /// </summary>
         /// <param name="cancellationToken">Cancellation token for the operation.</param>
@@ -116,6 +121,8 @@ namespace TaskbarEqualizer.SystemTray.Interfaces
         /// <param name="cancellationToken">Cancellation token for the operation.</param>
         /// <returns>Task representing the asynchronous rebuild operation.</returns>
         Task RebuildMenuAsync(CancellationToken cancellationToken = default);
+        Task ShowMenuAsync(object location);
+
     }
 
     /// <summary>

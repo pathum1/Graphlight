@@ -170,7 +170,7 @@ namespace TaskbarEqualizer.Main
 
                 // Run the Windows Forms message loop with custom application context
                 EmergencyLog("Starting Windows Forms message loop...");
-                Application.Run(new TaskbarEqualizerApplicationContext(_systemTrayManager, _orchestrator, logger, isMinimized));
+                Application.Run(new TaskbarEqualizerApplicationContext(_systemTrayManager, _orchestrator, logger, _host.Services, isMinimized));
                 EmergencyLog("Windows Forms message loop ended");
 
                 return 0;

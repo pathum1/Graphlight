@@ -5,6 +5,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using TaskbarEqualizer.Core.DependencyInjection;
+using TaskbarEqualizer.SystemTray.DependencyInjection;
 
 namespace TaskbarEqualizer
 {
@@ -29,6 +30,9 @@ namespace TaskbarEqualizer
                     {
                         // Add core audio processing services
                         services.AddCoreAudioServices();
+                        
+                        // Add system tray services for context menu functionality
+                        services.AddSystemTrayServices();
                     })
                     .ConfigureLogging(logging =>
                     {

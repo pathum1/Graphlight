@@ -29,7 +29,9 @@
       "Bash(start:*)",
       "Bash(\"J:\\Graphlight\\TaskbarEqualizer\\src\\TaskbarEqualizer.Main\\bin\\Debug\\net8.0-windows\\TaskbarEqualizer.Main.exe\")",
       "Bash(dotnet restore:*)",
-      "Bash(dir)"
+      "Bash(dir)",
+      "Bash(grep:*)",
+      "WebFetch(domain:www.codeproject.com)"
     ],
     "deny": []
   }

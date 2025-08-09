@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -58,6 +59,11 @@ namespace TaskbarEqualizer.SystemTray.ContextMenu
         /// <inheritdoc />
         public IReadOnlyList<IContextMenuItem> MenuItems => _menuItems.AsReadOnly();
 
+        /// <summary>
+        /// Gets the underlying ContextMenuStrip for direct assignment to controls.
+        /// </summary>
+        public ContextMenuStrip? ContextMenuStrip => _contextMenu;
+
         #endregion
 
         #region Public Methods
@@ -97,6 +103,16 @@ namespace TaskbarEqualizer.SystemTray.ContextMenu
         }
 
         /// <inheritdoc />
+        public Task ShowMenuAsync(object location)
+        {
+            if (location is Point point)
+            {
+                return ShowMenuAsync(point);
+            }
+            throw new ArgumentException("Location must be a Point", nameof(location));
+        }
+
+        /// <inheritdoc />
         public Task ShowMenuAsync(Point location, CancellationToken cancellationToken = default)
         {
             if (_disposed)
@@ -117,14 +133,14 @@ namespace TaskbarEqualizer.SystemTray.ContextMenu
                     return Task.CompletedTask;
                 }
 
-                lock (_menuLock)
+                // Ensure we're on the UI thread for showing the context menu
+                if (_contextMenu?.InvokeRequired == true)
                 {
-                    if (_contextMenu != null)
-                    {
-                        _contextMenu.Show(location);
-                        _isVisible = true;
-                        _logger.LogDebug("Context menu shown at {Location}", location);
-                    }
+                    _contextMenu.Invoke(new Action(() => ShowMenuInternal(location)));
+                }
+                else
+                {
+                    ShowMenuInternal(location);
                 }
             }
             catch (Exception ex)
@@ -134,6 +150,23 @@ namespace TaskbarEqualizer.SystemTray.ContextMenu
             }
 
             return Task.CompletedTask;
+        }
+
+        private void ShowMenuInternal(Point location)
+        {
+            lock (_menuLock)
+            {
+                if (_contextMenu != null)
+                {
+                    // Set foreground window to ensure proper menu behavior
+                    // This is required on Windows for context menus to work correctly
+                    SetForegroundWindow(GetActiveWindow());
+                    
+                    _contextMenu.Show(location);
+                    _isVisible = true;
+                    _logger.LogDebug("Context menu shown at {Location}", location);
+                }
+            }
         }
 
         /// <inheritdoc />
@@ -696,6 +729,16 @@ namespace TaskbarEqualizer.SystemTray.ContextMenu
             _logger.LogInformation("Exit menu item clicked");
             Application.Exit();
         }
+
+        #endregion
+
+        #region Windows API
+
+        [DllImport("user32.dll")]
+        private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetActiveWindow();
 
         #endregion
 

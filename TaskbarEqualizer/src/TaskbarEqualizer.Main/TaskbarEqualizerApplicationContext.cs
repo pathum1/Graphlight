@@ -148,6 +148,14 @@ namespace TaskbarEqualizer.Main
                             MessageBoxButtons.OK,
                             MessageBoxIcon.Information);
                         break;
+                    case "settings":
+                        _logger.LogInformation("Settings requested from context menu");
+                        MessageBox.Show(
+                            "Settings Dialog\n\nThis feature will be implemented in a future version.\n\nFor now, you can configure the application through the system tray options.",
+                            "Settings - Coming Soon",
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Information);
+                        break;
                     default:
                         _logger.LogDebug("Unhandled menu item: {ItemId}", e.MenuItem.Id);
                         break;

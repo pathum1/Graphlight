@@ -744,13 +744,7 @@ namespace TaskbarEqualizer.SystemTray.ContextMenu
         private void OnAboutClicked(IContextMenuItem menuItem)
         {
             _logger.LogInformation("About menu item clicked");
-            
-            MessageBox.Show(
-                "TaskbarEqualizer v1.0\nReal-time audio visualization for Windows 11 taskbar\n\n© 2024 TaskbarEqualizer",
-                "About TaskbarEqualizer",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Information
-            );
+            // About dialog is handled by ApplicationOrchestrator through MenuItemClicked event
         }
 
         private void OnExitClicked(IContextMenuItem menuItem)

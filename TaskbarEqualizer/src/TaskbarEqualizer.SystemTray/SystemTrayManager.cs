@@ -22,6 +22,7 @@ namespace TaskbarEqualizer.SystemTray
         private NotifyIcon? _notifyIcon;
         private Icon? _currentIcon;
         private string _toolTipText = string.Empty;
+        private SynchronizationContext? _uiCtx;
         
         private bool _isVisible;
         private bool _isInitialized;
@@ -75,7 +76,7 @@ namespace TaskbarEqualizer.SystemTray
         #region Public Methods
 
         /// <inheritdoc />
-        public async Task InitializeAsync(Icon initialIcon, string toolTipText, CancellationToken cancellationToken = default)
+        public Task InitializeAsync(Icon initialIcon, string toolTipText, CancellationToken cancellationToken = default)
         {
             if (_disposed)
                 throw new ObjectDisposedException(nameof(SystemTrayManager));
@@ -83,7 +84,7 @@ namespace TaskbarEqualizer.SystemTray
             if (_isInitialized)
             {
                 _logger.LogWarning("SystemTrayManager is already initialized");
-                return;
+                return Task.CompletedTask;
             }
 
             if (initialIcon == null)
@@ -95,46 +96,19 @@ namespace TaskbarEqualizer.SystemTray
 
             try
             {
-                // FORCE creation on UI thread with STA apartment state
-                var tcs = new TaskCompletionSource<bool>();
+                // Capture UI synchronization context (called from WinForms Timer)
+                _uiCtx = SynchronizationContext.Current;
+                _logger.LogInformation("🔧 DIAGNOSTIC: Captured UI SynchronizationContext: {ContextType}", _uiCtx?.GetType().Name ?? "null");
                 
-                // Create a dedicated STA thread for NotifyIcon
-                var staThread = new Thread(() =>
+                // Create NotifyIcon directly on UI thread
+                lock (_trayLock)
                 {
-                    try
-                    {
-                        _logger.LogInformation("🔧 DIAGNOSTIC: Creating NotifyIcon on dedicated STA thread");
-                        
-                        // Set up Windows Forms application context on this thread
-                        Application.EnableVisualStyles();
-                        Application.SetCompatibleTextRenderingDefault(false);
-                        
-                        lock (_trayLock)
-                        {
-                            CreateNotifyIcon(initialIcon, toolTipText);
-                            _isInitialized = true;
-                        }
-                        
-                        _logger.LogInformation("🔧 DIAGNOSTIC: NotifyIcon created successfully on STA thread");
-                        tcs.SetResult(true);
-                        
-                        // Keep the thread alive for NotifyIcon message processing
-                        Application.Run();
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogError(ex, "🔧 DIAGNOSTIC: Failed to create NotifyIcon on STA thread");
-                        tcs.SetException(ex);
-                    }
-                });
+                    CreateNotifyIcon(initialIcon, toolTipText);
+                    _isInitialized = true;
+                }
                 
-                staThread.SetApartmentState(ApartmentState.STA);
-                staThread.IsBackground = true;
-                staThread.Name = "NotifyIcon STA Thread";
-                staThread.Start();
-                
-                await tcs.Task;
                 _logger.LogDebug("SystemTrayManager initialized successfully");
+                return Task.CompletedTask;
             }
             catch (Exception ex)
             {
@@ -144,7 +118,7 @@ namespace TaskbarEqualizer.SystemTray
         }
 
         /// <inheritdoc />
-        public async Task ShowAsync(CancellationToken cancellationToken = default)
+        public Task ShowAsync(CancellationToken cancellationToken = default)
         {
             if (_disposed)
                 throw new ObjectDisposedException(nameof(SystemTrayManager));
@@ -155,14 +129,14 @@ namespace TaskbarEqualizer.SystemTray
             if (_isVisible)
             {
                 _logger.LogDebug("Tray icon is already visible");
-                return;
+                return Task.CompletedTask;
             }
 
             _logger.LogDebug("Showing tray icon");
 
             try
             {
-                await Task.Run(() =>
+                OnUi(() =>
                 {
                     lock (_trayLock)
                     {
@@ -179,9 +153,10 @@ namespace TaskbarEqualizer.SystemTray
                             _logger.LogError("🔧 DIAGNOSTIC: Cannot show tray icon - NotifyIcon is null!");
                         }
                     }
-                }, cancellationToken);
+                });
 
                 _logger.LogDebug("Tray icon shown successfully");
+                return Task.CompletedTask;
             }
             catch (Exception ex)
             {
@@ -191,7 +166,7 @@ namespace TaskbarEqualizer.SystemTray
         }
 
         /// <inheritdoc />
-        public async Task HideAsync(CancellationToken cancellationToken = default)
+        public Task HideAsync(CancellationToken cancellationToken = default)
         {
             if (_disposed)
                 throw new ObjectDisposedException(nameof(SystemTrayManager));
@@ -199,14 +174,14 @@ namespace TaskbarEqualizer.SystemTray
             if (!_isVisible)
             {
                 _logger.LogDebug("Tray icon is already hidden");
-                return;
+                return Task.CompletedTask;
             }
 
             _logger.LogDebug("Hiding tray icon");
 
             try
             {
-                await Task.Run(() =>
+                OnUi(() =>
                 {
                     lock (_trayLock)
                     {
@@ -217,9 +192,10 @@ namespace TaskbarEqualizer.SystemTray
                             OnPropertyChanged(nameof(IsVisible));
                         }
                     }
-                }, cancellationToken);
+                });
 
                 _logger.LogDebug("Tray icon hidden successfully");
+                return Task.CompletedTask;
             }
             catch (Exception ex)
             {
@@ -229,7 +205,7 @@ namespace TaskbarEqualizer.SystemTray
         }
 
         /// <inheritdoc />
-        public async Task UpdateIconAsync(Icon newIcon, CancellationToken cancellationToken = default)
+        public Task UpdateIconAsync(Icon newIcon, CancellationToken cancellationToken = default)
         {
             if (_disposed)
                 throw new ObjectDisposedException(nameof(SystemTrayManager));
@@ -239,7 +215,8 @@ namespace TaskbarEqualizer.SystemTray
 
             try
             {
-                await Task.Run(() => UpdateIconInternal(newIcon), cancellationToken);
+                OnUi(() => UpdateIconInternal(newIcon));
+                return Task.CompletedTask;
             }
             catch (Exception ex)
             {
@@ -259,7 +236,7 @@ namespace TaskbarEqualizer.SystemTray
 
             try
             {
-                UpdateIconInternal(newIcon);
+                OnUi(() => UpdateIconInternal(newIcon));
             }
             catch (Exception ex)
             {
@@ -269,7 +246,7 @@ namespace TaskbarEqualizer.SystemTray
         }
 
         /// <inheritdoc />
-        public async Task UpdateToolTipAsync(string text, CancellationToken cancellationToken = default)
+        public Task UpdateToolTipAsync(string text, CancellationToken cancellationToken = default)
         {
             if (_disposed)
                 throw new ObjectDisposedException(nameof(SystemTrayManager));
@@ -278,13 +255,13 @@ namespace TaskbarEqualizer.SystemTray
                 text = string.Empty;
 
             if (_toolTipText == text)
-                return;
+                return Task.CompletedTask;
 
             _logger.LogDebug("Updating tooltip to: {ToolTip}", text);
 
             try
             {
-                await Task.Run(() =>
+                OnUi(() =>
                 {
                     lock (_trayLock)
                     {
@@ -297,9 +274,10 @@ namespace TaskbarEqualizer.SystemTray
                             OnPropertyChanged(nameof(ToolTipText));
                         }
                     }
-                }, cancellationToken);
+                });
 
                 _logger.LogDebug("Tooltip updated successfully");
+                return Task.CompletedTask;
             }
             catch (Exception ex)
             {
@@ -309,7 +287,7 @@ namespace TaskbarEqualizer.SystemTray
         }
 
         /// <inheritdoc />
-        public async Task ShowBalloonTipAsync(string title, string text, BalloonTipIcon icon = BalloonTipIcon.Info, 
+        public Task ShowBalloonTipAsync(string title, string text, BalloonTipIcon icon = BalloonTipIcon.Info, 
             int timeout = 3000, CancellationToken cancellationToken = default)
         {
             if (_disposed)
@@ -318,17 +296,17 @@ namespace TaskbarEqualizer.SystemTray
             if (!_isInitialized || !_isVisible)
             {
                 _logger.LogWarning("Cannot show balloon tip - tray icon not initialized or visible");
-                return;
+                return Task.CompletedTask;
             }
 
             if (string.IsNullOrEmpty(title) && string.IsNullOrEmpty(text))
-                return;
+                return Task.CompletedTask;
 
             _logger.LogDebug("Showing balloon tip: {Title} - {Text}", title, text);
 
             try
             {
-                await Task.Run(() =>
+                OnUi(() =>
                 {
                     lock (_trayLock)
                     {
@@ -345,9 +323,10 @@ namespace TaskbarEqualizer.SystemTray
                             _notifyIcon.ShowBalloonTip(timeout, title ?? string.Empty, text ?? string.Empty, toolTipIcon);
                         }
                     }
-                }, cancellationToken);
+                });
 
                 _logger.LogDebug("Balloon tip shown successfully");
+                return Task.CompletedTask;
             }
             catch (Exception ex)
             {
@@ -385,14 +364,17 @@ namespace TaskbarEqualizer.SystemTray
             if (_disposed)
                 throw new ObjectDisposedException(nameof(SystemTrayManager));
 
-            lock (_trayLock)
+            OnUi(() =>
             {
-                if (_notifyIcon != null)
+                lock (_trayLock)
                 {
-                    _notifyIcon.ContextMenuStrip = contextMenuStrip;
-                    _logger.LogDebug("Context menu strip assigned to notify icon");
+                    if (_notifyIcon != null)
+                    {
+                        _notifyIcon.ContextMenuStrip = contextMenuStrip;
+                        _logger.LogDebug("Context menu strip assigned to notify icon");
+                    }
                 }
-            }
+            });
         }
 
         /// <inheritdoc />
@@ -432,19 +414,19 @@ namespace TaskbarEqualizer.SystemTray
         }
 
         /// <inheritdoc />
-        public async Task RefreshAsync(CancellationToken cancellationToken = default)
+        public Task RefreshAsync(CancellationToken cancellationToken = default)
         {
             if (_disposed)
                 throw new ObjectDisposedException(nameof(SystemTrayManager));
 
             if (!_isInitialized)
-                return;
+                return Task.CompletedTask;
 
             _logger.LogDebug("Refreshing tray icon");
 
             try
             {
-                await Task.Run(() =>
+                OnUi(() =>
                 {
                     lock (_trayLock)
                     {
@@ -456,9 +438,10 @@ namespace TaskbarEqualizer.SystemTray
                             _notifyIcon.Visible = true;
                         }
                     }
-                }, cancellationToken);
+                });
 
                 _logger.LogDebug("Tray icon refreshed successfully");
+                return Task.CompletedTask;
             }
             catch (Exception ex)
             {
@@ -470,6 +453,21 @@ namespace TaskbarEqualizer.SystemTray
         #endregion
 
         #region Private Methods
+
+        /// <summary>
+        /// Marshals an action to the UI thread using the captured synchronization context.
+        /// </summary>
+        private void OnUi(Action action)
+        {
+            if (_uiCtx == null || SynchronizationContext.Current == _uiCtx)
+            {
+                action();
+            }
+            else
+            {
+                _uiCtx.Send(_ => action(), null);
+            }
+        }
 
         private void CreateNotifyIcon(Icon initialIcon, string toolTipText)
         {

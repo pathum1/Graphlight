@@ -30,6 +30,7 @@ namespace TaskbarEqualizer.Configuration.Services
         private bool _disposed;
         private object? _mainWindow; // Will be set from the main program
         private object? _spectrumWindow; // Reference to the spectrum analyzer window
+        private bool _isSettingsDialogOpen; // Flag to prevent dialog re-opening
 
         /// <summary>
         /// Initializes a new instance of the ApplicationOrchestrator.
@@ -328,6 +329,39 @@ namespace TaskbarEqualizer.Configuration.Services
         {
             try
             {
+                // Apply volume threshold gating
+                var settings = _settingsManager.Settings;
+                if (settings.VolumeThreshold > 0 && e.RmsLevel < settings.VolumeThreshold)
+                {
+                    // Volume is below threshold, send empty spectrum data to hide visualization
+                    var emptySpectrum = new SpectrumDataEventArgs(
+                        new double[e.Spectrum?.Length ?? 16], // Empty spectrum array
+                        0, // No bands
+                        0.0, // No peak
+                        0, // No peak band index
+                        e.TimestampTicks,
+                        e.ProcessingLatency,
+                        0.0 // No RMS
+                    );
+                    
+                    _taskbarOverlayManager.UpdateVisualization(emptySpectrum);
+                    
+                    if (_spectrumWindow != null)
+                    {
+                        try
+                        {
+                            var spectrumWindowType = _spectrumWindow.GetType();
+                            var updateMethod = spectrumWindowType.GetMethod("UpdateSpectrum");
+                            updateMethod?.Invoke(_spectrumWindow, new object[] { emptySpectrum });
+                        }
+                        catch (Exception spectrumEx)
+                        {
+                            _logger.LogDebug(spectrumEx, "Error updating spectrum window with threshold data");
+                        }
+                    }
+                    return;
+                }
+
                 // Reduce logging frequency for performance - only log significant changes
                 var shouldLog = _logger.IsEnabled(Microsoft.Extensions.Logging.LogLevel.Trace) || 
                                (e.PeakValue > 0.1 && DateTime.Now.Millisecond % 500 < 50);
@@ -511,6 +545,11 @@ namespace TaskbarEqualizer.Configuration.Services
             try
             {
                 _logger.LogDebug("Settings changed: {ChangedKeys}", string.Join(", ", e.ChangedKeys));
+                
+                // Note: We removed the _isSettingsDialogOpen check here because:
+                // 1. We DO want settings to be applied when the user clicks Apply
+                // 2. The settings dialog uses cloned settings to prevent unwanted events during editing
+                // 3. The only events that should reach here are from actual Apply operations
                 var settings = _settingsManager.Settings;
 
                 // Handle auto-start setting changes
@@ -526,6 +565,14 @@ namespace TaskbarEqualizer.Configuration.Services
                         await _autoStartManager.DisableAutoStartAsync();
                         _logger.LogInformation("Auto-start disabled via settings");
                     }
+                }
+
+                // Handle audio device settings changes
+                var needsAudioCaptureUpdate = false;
+                if (e.ChangedKeys.Contains("SelectedAudioDevice"))
+                {
+                    needsAudioCaptureUpdate = true;
+                    _logger.LogInformation("Selected audio device changed to: {AudioDevice}", settings.SelectedAudioDevice);
                 }
 
                 // Handle spectrum analyzer settings changes
@@ -558,6 +605,12 @@ namespace TaskbarEqualizer.Configuration.Services
                     _logger.LogInformation("Gain factor changed to: {GainFactor}", settings.GainFactor);
                 }
 
+                if (e.ChangedKeys.Contains("VolumeThreshold"))
+                {
+                    needsSpectrumWindowUpdate = true;
+                    _logger.LogInformation("Volume threshold changed to: {VolumeThreshold}", settings.VolumeThreshold);
+                }
+
                 // Additional visualization settings that require overlay updates
                 var visualizationSettings = new[]
                 {
@@ -573,6 +626,12 @@ namespace TaskbarEqualizer.Configuration.Services
                     needsSpectrumWindowUpdate = true;
                     var changedVizSettings = visualizationSettings.Where(setting => e.ChangedKeys.Contains(setting));
                     _logger.LogInformation("Visualization settings changed: {Settings}", string.Join(", ", changedVizSettings));
+                }
+
+                // Apply audio capture updates
+                if (needsAudioCaptureUpdate)
+                {
+                    await UpdateAudioCaptureSettings(settings);
                 }
 
                 // Apply frequency analyzer updates
@@ -730,7 +789,23 @@ namespace TaskbarEqualizer.Configuration.Services
         /// </summary>
         private void OnSettingsDialogRequested()
         {
+            if (_isSettingsDialogOpen)
+            {
+                _logger.LogDebug("Settings dialog already open, ignoring duplicate request");
+                return;
+            }
+
+            _isSettingsDialogOpen = true;
             SettingsDialogRequested?.Invoke(this, EventArgs.Empty);
+        }
+
+        /// <summary>
+        /// Marks the settings dialog as closed to allow future requests.
+        /// </summary>
+        public void OnSettingsDialogClosed()
+        {
+            _isSettingsDialogOpen = false;
+            _logger.LogDebug("Settings dialog marked as closed");
         }
 
         /// <summary>
@@ -759,6 +834,37 @@ namespace TaskbarEqualizer.Configuration.Services
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error during application exit");
+            }
+        }
+
+        /// <summary>
+        /// Updates the audio capture service with new settings.
+        /// </summary>
+        /// <param name="settings">The updated application settings.</param>
+        private async Task UpdateAudioCaptureSettings(ApplicationSettings settings)
+        {
+            try
+            {
+                _logger.LogInformation("Updating audio capture settings");
+
+                // Handle device switching if a specific device is selected
+                if (!string.IsNullOrEmpty(settings.SelectedAudioDevice))
+                {
+                    var availableDevices = _audioCaptureService.GetAvailableDevices();
+                    var targetDevice = availableDevices.FirstOrDefault(d => d.ID == settings.SelectedAudioDevice);
+                    
+                    if (targetDevice != null && targetDevice != _audioCaptureService.CurrentDevice)
+                    {
+                        _logger.LogInformation("Switching to selected audio device: {DeviceName}", targetDevice.FriendlyName);
+                        await _audioCaptureService.SwitchDeviceAsync(targetDevice);
+                    }
+                }
+
+                _logger.LogInformation("Audio capture settings updated successfully");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to update audio capture settings");
             }
         }
 

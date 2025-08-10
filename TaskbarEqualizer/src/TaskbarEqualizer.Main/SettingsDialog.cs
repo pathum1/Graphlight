@@ -26,6 +26,9 @@ namespace TaskbarEqualizer.Main
         private readonly IServiceProvider _serviceProvider;
         private ApplicationSettings _settings;
         private ApplicationSettings _originalSettings;
+        
+        // Flag to prevent infinite event loops during dialog operations
+        private bool _isApplyingSettings;
 
         // UI Controls
         private TabControl _tabControl = null!;
@@ -60,6 +63,8 @@ namespace TaskbarEqualizer.Main
         private Panel _gradientPreview = null!;
 
         // Audio Tab Controls
+        private ComboBox _audioDeviceComboBox = null!;
+        private CheckBox _enableAutoDeviceSwitchCheckBox = null!;
         private TrackBar _frequencyBandsTrackBar = null!;
         private Label _frequencyBandsValueLabel = null!;
         private TrackBar _smoothingFactorTrackBar = null!;
@@ -81,14 +86,15 @@ namespace TaskbarEqualizer.Main
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _serviceProvider = serviceProvider ?? throw new ArgumentNullException(nameof(serviceProvider));
             
-            _settings = _settingsManager.Settings;
-            _originalSettings = _settings.Clone();
+            // Work with a copy of the settings to avoid triggering events during dialog operations
+            _originalSettings = _settingsManager.Settings.Clone();
+            _settings = _originalSettings.Clone(); // Working copy for the dialog
 
             InitializeComponent();
             ApplyModernStyling();
             LoadSettings();
             
-            _logger.LogInformation("Settings dialog initialized");
+            _logger.LogInformation("Settings dialog initialized with temporary settings copy");
         }
 
         private void InitializeComponent()
@@ -402,7 +408,7 @@ namespace TaskbarEqualizer.Main
             var layout = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
-                RowCount = 6,
+                RowCount = 8,
                 ColumnCount = 2,
                 Padding = new Padding(10)
             };
@@ -412,33 +418,54 @@ namespace TaskbarEqualizer.Main
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
 
             // Configure rows
-            for (int i = 0; i < 5; i++)
+            for (int i = 0; i < 7; i++)
                 layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 50F));
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
 
+            // Audio Device
+            layout.Controls.Add(new Label { Text = "Audio Device:", TextAlign = ContentAlignment.MiddleLeft }, 0, 0);
+            _audioDeviceComboBox = new ComboBox
+            {
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                Dock = DockStyle.Fill
+            };
+            _audioDeviceComboBox.Items.Add("Default System Device");
+            _audioDeviceComboBox.SelectedIndexChanged += OnAudioDeviceChanged;
+            layout.Controls.Add(_audioDeviceComboBox, 1, 0);
+
+            // Auto Device Switch
+            layout.Controls.Add(new Label { Text = "Auto Switch:", TextAlign = ContentAlignment.MiddleLeft }, 0, 1);
+            _enableAutoDeviceSwitchCheckBox = new CheckBox
+            {
+                Text = "Automatically switch to new default device",
+                Dock = DockStyle.Left
+            };
+            _enableAutoDeviceSwitchCheckBox.CheckedChanged += OnEnableAutoDeviceSwitchChanged;
+            layout.Controls.Add(_enableAutoDeviceSwitchCheckBox, 1, 1);
+
             // Frequency Bands
-            layout.Controls.Add(new Label { Text = "Frequency Bands:", TextAlign = ContentAlignment.MiddleLeft }, 0, 0);
+            layout.Controls.Add(new Label { Text = "Frequency Bands:", TextAlign = ContentAlignment.MiddleLeft }, 0, 2);
             var bandsPanel = CreateSliderPanel(out _frequencyBandsTrackBar, out _frequencyBandsValueLabel, 4, 64, "");
             _frequencyBandsTrackBar.ValueChanged += OnFrequencyBandsChanged;
-            layout.Controls.Add(bandsPanel, 1, 0);
+            layout.Controls.Add(bandsPanel, 1, 2);
 
             // Smoothing Factor
-            layout.Controls.Add(new Label { Text = "Smoothing:", TextAlign = ContentAlignment.MiddleLeft }, 0, 1);
+            layout.Controls.Add(new Label { Text = "Smoothing:", TextAlign = ContentAlignment.MiddleLeft }, 0, 3);
             var smoothingPanel = CreateSliderPanel(out _smoothingFactorTrackBar, out _smoothingFactorValueLabel, 0, 100, "%");
             _smoothingFactorTrackBar.ValueChanged += OnSmoothingFactorChanged;
-            layout.Controls.Add(smoothingPanel, 1, 1);
+            layout.Controls.Add(smoothingPanel, 1, 3);
 
             // Gain Factor
-            layout.Controls.Add(new Label { Text = "Gain:", TextAlign = ContentAlignment.MiddleLeft }, 0, 2);
+            layout.Controls.Add(new Label { Text = "Gain:", TextAlign = ContentAlignment.MiddleLeft }, 0, 4);
             var gainPanel = CreateSliderPanel(out _gainFactorTrackBar, out _gainFactorValueLabel, 10, 1000, "%");
             _gainFactorTrackBar.ValueChanged += OnGainFactorChanged;
-            layout.Controls.Add(gainPanel, 1, 2);
+            layout.Controls.Add(gainPanel, 1, 4);
 
             // Volume Threshold
-            layout.Controls.Add(new Label { Text = "Threshold:", TextAlign = ContentAlignment.MiddleLeft }, 0, 3);
+            layout.Controls.Add(new Label { Text = "Threshold:", TextAlign = ContentAlignment.MiddleLeft }, 0, 5);
             var thresholdPanel = CreateSliderPanel(out _volumeThresholdTrackBar, out _volumeThresholdValueLabel, 0, 100, "%");
             _volumeThresholdTrackBar.ValueChanged += OnVolumeThresholdChanged;
-            layout.Controls.Add(thresholdPanel, 1, 3);
+            layout.Controls.Add(thresholdPanel, 1, 5);
 
             tabPage.Controls.Add(layout);
             _tabControl.TabPages.Add(tabPage);
@@ -645,6 +672,8 @@ namespace TaskbarEqualizer.Main
                 UpdateColorControlsEnabled();
 
                 // Audio Tab
+                LoadAudioDevices();
+                _enableAutoDeviceSwitchCheckBox.Checked = _settings.EnableAutoDeviceSwitch;
                 _frequencyBandsTrackBar.Value = _settings.FrequencyBands;
                 _frequencyBandsValueLabel.Text = _settings.FrequencyBands.ToString();
                 _smoothingFactorTrackBar.Value = (int)(_settings.SmoothingFactor * 100);
@@ -866,6 +895,92 @@ namespace TaskbarEqualizer.Main
             UpdateApplyButton();
         }
 
+        private void OnAudioDeviceChanged(object? sender, EventArgs e)
+        {
+            if (_audioDeviceComboBox.SelectedIndex == 0)
+            {
+                _settings.SelectedAudioDevice = string.Empty; // Default device
+            }
+            else if (_audioDeviceComboBox.Tag is Dictionary<string, string> deviceMap && 
+                     _audioDeviceComboBox.SelectedItem is string selectedName && 
+                     deviceMap.TryGetValue(selectedName, out var deviceId))
+            {
+                _settings.SelectedAudioDevice = deviceId;
+            }
+            UpdateApplyButton();
+        }
+
+        private void OnEnableAutoDeviceSwitchChanged(object? sender, EventArgs e)
+        {
+            _settings.EnableAutoDeviceSwitch = _enableAutoDeviceSwitchCheckBox.Checked;
+            UpdateApplyButton();
+        }
+
+        private void LoadAudioDevices()
+        {
+            try
+            {
+                _audioDeviceComboBox.Items.Clear();
+                _audioDeviceComboBox.Items.Add("Default System Device");
+
+                // Try to get available audio devices from the service provider
+                var audioCaptureService = _serviceProvider.GetService(typeof(TaskbarEqualizer.Core.Interfaces.IAudioCaptureService)) 
+                    as TaskbarEqualizer.Core.Interfaces.IAudioCaptureService;
+
+                if (audioCaptureService != null)
+                {
+                    var devices = audioCaptureService.GetAvailableDevices();
+                    var deviceMap = new Dictionary<string, string>();
+
+                    foreach (var device in devices)
+                    {
+                        try
+                        {
+                            var displayName = device.FriendlyName;
+                            _audioDeviceComboBox.Items.Add(displayName);
+                            deviceMap[displayName] = device.ID;
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning(ex, "Failed to add audio device to list: {DeviceId}", device.ID);
+                        }
+                    }
+
+                    _audioDeviceComboBox.Tag = deviceMap;
+
+                    // Select current device
+                    if (string.IsNullOrEmpty(_settings.SelectedAudioDevice))
+                    {
+                        _audioDeviceComboBox.SelectedIndex = 0; // Default device
+                    }
+                    else
+                    {
+                        var selectedDevice = deviceMap.FirstOrDefault(kvp => kvp.Value == _settings.SelectedAudioDevice);
+                        if (!selectedDevice.Equals(default(KeyValuePair<string, string>)))
+                        {
+                            _audioDeviceComboBox.SelectedItem = selectedDevice.Key;
+                        }
+                        else
+                        {
+                            _audioDeviceComboBox.SelectedIndex = 0; // Fallback to default
+                        }
+                    }
+                }
+                else
+                {
+                    _audioDeviceComboBox.SelectedIndex = 0; // Default device
+                    _logger.LogWarning("AudioCaptureService not available, using default device selection");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to load audio devices");
+                _audioDeviceComboBox.Items.Clear();
+                _audioDeviceComboBox.Items.Add("Default System Device");
+                _audioDeviceComboBox.SelectedIndex = 0;
+            }
+        }
+
         private void OnDonationClick(object? sender, EventArgs e)
         {
             try
@@ -945,8 +1060,21 @@ namespace TaskbarEqualizer.Main
 
         private void ApplySettingsSync()
         {
+            if (_isApplyingSettings)
+            {
+                _logger.LogDebug("Settings application already in progress, skipping");
+                return;
+            }
+
             try
             {
+                _isApplyingSettings = true;
+
+                _logger.LogDebug("Applying settings changes to live settings instance");
+
+                // Copy the dialog settings to the actual settings instance
+                _settings.CopyTo(_settingsManager.Settings);
+
                 // Apply startup registry setting synchronously
                 if (_settings.StartWithWindows != _originalSettings.StartWithWindows)
                 {
@@ -965,6 +1093,10 @@ namespace TaskbarEqualizer.Main
                 _logger.LogError(ex, "Failed to apply settings (sync)");
                 throw;
             }
+            finally
+            {
+                _isApplyingSettings = false;
+            }
         }
 
         private void ApplyStartWithWindowsSync(bool enable)
@@ -978,7 +1110,10 @@ namespace TaskbarEqualizer.Main
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Failed to apply auto-start setting (sync)");
-                throw;
+                // Don't throw here - this would cause the entire Apply operation to fail
+                // Just log the error and continue with other settings
+                MessageBox.Show($"Warning: Could not update startup settings: {ex.Message}", "Warning", 
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
         }
 
@@ -989,23 +1124,37 @@ namespace TaskbarEqualizer.Main
             
             try
             {
+                var exePath = GetExecutablePath();
+                _logger.LogDebug("Executable path found: {ExePath}", exePath);
+                
                 using var key = Registry.CurrentUser.OpenSubKey(keyName, true);
                 if (key != null)
                 {
                     if (enable)
                     {
-                        var exePath = GetExecutablePath();
+                        if (string.IsNullOrEmpty(exePath))
+                        {
+                            throw new InvalidOperationException("Could not determine executable path for auto-start");
+                        }
+                        
+                        _logger.LogDebug("Setting registry auto-start value: {ValueName} = \"{ExePath}\"", valueName, exePath);
                         key.SetValue(valueName, $"\"{exePath}\"");
                     }
                     else
                     {
+                        _logger.LogDebug("Removing registry auto-start value: {ValueName}", valueName);
                         key.DeleteValue(valueName, false);
                     }
+                }
+                else
+                {
+                    throw new InvalidOperationException("Could not open Windows startup registry key");
                 }
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Registry operation failed for auto-start");
+                _logger.LogError(ex, "Registry operation failed for auto-start - KeyName: {KeyName}, ValueName: {ValueName}, Enable: {Enable}", 
+                    keyName, valueName, enable);
                 throw;
             }
         }
@@ -1042,6 +1191,8 @@ namespace TaskbarEqualizer.Main
                    _settings.CustomSecondaryColor != _originalSettings.CustomSecondaryColor ||
                    _settings.EnableGradient != _originalSettings.EnableGradient ||
                    _settings.GradientDirection != _originalSettings.GradientDirection ||
+                   _settings.SelectedAudioDevice != _originalSettings.SelectedAudioDevice ||
+                   _settings.EnableAutoDeviceSwitch != _originalSettings.EnableAutoDeviceSwitch ||
                    _settings.FrequencyBands != _originalSettings.FrequencyBands ||
                    Math.Abs(_settings.SmoothingFactor - _originalSettings.SmoothingFactor) > 0.01 ||
                    Math.Abs(_settings.GainFactor - _originalSettings.GainFactor) > 0.01 ||
@@ -1050,8 +1201,21 @@ namespace TaskbarEqualizer.Main
 
         private async Task ApplySettings()
         {
+            if (_isApplyingSettings)
+            {
+                _logger.LogDebug("Settings application already in progress, skipping async apply");
+                return;
+            }
+
             try
             {
+                _isApplyingSettings = true;
+
+                _logger.LogDebug("Applying settings changes to live settings instance (async)");
+
+                // Copy the dialog settings to the actual settings instance
+                _settings.CopyTo(_settingsManager.Settings);
+
                 // Apply startup registry setting
                 if (_settings.StartWithWindows != _originalSettings.StartWithWindows)
                 {
@@ -1066,8 +1230,14 @@ namespace TaskbarEqualizer.Main
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to apply settings");
-                MessageBox.Show($"Failed to apply settings: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                _logger.LogError(ex, "Failed to apply settings - Exception details: {ExceptionType}: {Message}", 
+                    ex.GetType().Name, ex.Message);
+                MessageBox.Show($"Failed to apply settings: {ex.Message}\n\nSee application logs for more details.", 
+                    "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                _isApplyingSettings = false;
             }
         }
 
@@ -1138,38 +1308,51 @@ namespace TaskbarEqualizer.Main
             {
                 using var currentProcess = System.Diagnostics.Process.GetCurrentProcess();
                 var mainModule = currentProcess.MainModule;
-                if (mainModule?.FileName != null && mainModule.FileName.EndsWith(".exe"))
+                if (mainModule?.FileName != null && System.IO.File.Exists(mainModule.FileName))
                 {
                     return mainModule.FileName;
                 }
             }
             catch { /* fallback to next method */ }
 
-            // Method 2: Assembly location with .dll to .exe conversion
+            // Method 2: Look for TaskbarEqualizer.exe in the same directory as this assembly
             try
             {
                 var assemblyPath = System.Reflection.Assembly.GetExecutingAssembly().Location;
-                if (assemblyPath.EndsWith(".dll"))
+                var assemblyDir = System.IO.Path.GetDirectoryName(assemblyPath);
+                if (!string.IsNullOrEmpty(assemblyDir))
                 {
-                    var exePath = assemblyPath.Replace(".dll", ".exe");
+                    var exePath = System.IO.Path.Combine(assemblyDir, "TaskbarEqualizer.exe");
                     if (System.IO.File.Exists(exePath))
                     {
                         return exePath;
                     }
                 }
-                else if (assemblyPath.EndsWith(".exe"))
+            }
+            catch { /* fallback to next method */ }
+
+            // Method 3: Environment current directory + TaskbarEqualizer.exe
+            try
+            {
+                var currentDir = Environment.CurrentDirectory;
+                var exePath = System.IO.Path.Combine(currentDir, "TaskbarEqualizer.exe");
+                if (System.IO.File.Exists(exePath))
                 {
-                    return assemblyPath;
+                    return exePath;
                 }
             }
             catch { /* fallback to next method */ }
 
-            // Method 3: Environment current directory + process name
+            // Method 4: Process name + exe extension
             try
             {
                 var processName = System.Diagnostics.Process.GetCurrentProcess().ProcessName;
+                if (!processName.EndsWith(".exe"))
+                {
+                    processName += ".exe";
+                }
                 var currentDir = Environment.CurrentDirectory;
-                var exePath = System.IO.Path.Combine(currentDir, processName + ".exe");
+                var exePath = System.IO.Path.Combine(currentDir, processName);
                 if (System.IO.File.Exists(exePath))
                 {
                     return exePath;
@@ -1177,8 +1360,15 @@ namespace TaskbarEqualizer.Main
             }
             catch { /* fallback to assembly location */ }
 
-            // Fallback: Use assembly location as-is
-            return System.Reflection.Assembly.GetExecutingAssembly().Location;
+            // Fallback: If we can't find the exe, return a constructed path
+            // This should not cause a "file not found" error in registry operations
+            var fallbackPath = System.Reflection.Assembly.GetExecutingAssembly().Location;
+            if (fallbackPath.EndsWith(".dll"))
+            {
+                var dir = System.IO.Path.GetDirectoryName(fallbackPath);
+                fallbackPath = System.IO.Path.Combine(dir ?? "", "TaskbarEqualizer.exe");
+            }
+            return fallbackPath;
         }
     }
 }

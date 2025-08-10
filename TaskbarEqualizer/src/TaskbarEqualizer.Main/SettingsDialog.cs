@@ -686,8 +686,19 @@ namespace TaskbarEqualizer.Main
 
         private void OnRememberPositionChanged(object? sender, EventArgs e)
         {
-            _ = _settingsManager.SetSettingAsync("RememberPosition", _rememberPositionCheckBox.Checked, false);
-            UpdateApplyButton();
+            var value = _rememberPositionCheckBox.Checked;
+            Task.Run(async () => 
+            {
+                try 
+                {
+                    await _settingsManager.SetSettingAsync("RememberPosition", value, false);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Failed to set RememberPosition setting");
+                }
+            });
+            _logger.LogDebug("Remember position changed: {Value}", value);
         }
 
         private void OnVisualizationStyleChanged(object? sender, EventArgs e)
@@ -792,30 +803,39 @@ namespace TaskbarEqualizer.Main
             var rect = _gradientPreview.ClientRectangle;
             if (rect.Width <= 0 || rect.Height <= 0) return;
 
-            using var brush = CreateGradientBrush(rect);
-            e.Graphics.FillRectangle(brush, rect);
-        }
-
-        private Brush CreateGradientBrush(Rectangle rect)
-        {
-            if (!_settings.EnableGradient || !_settings.UseCustomColors)
+            // Fill background first
+            using (var bgBrush = new SolidBrush(SystemColors.Window))
             {
-                return new SolidBrush(_settings.CustomPrimaryColor);
+                e.Graphics.FillRectangle(bgBrush, rect);
             }
 
-            return _settings.GradientDirection switch
+            // Apply gradient or solid color
+            if (_settings.EnableGradient && _settings.UseCustomColors)
             {
-                GradientDirection.Horizontal => new System.Drawing.Drawing2D.LinearGradientBrush(
-                    new Point(rect.Left, rect.Top), new Point(rect.Right, rect.Top),
-                    _settings.CustomPrimaryColor, _settings.CustomSecondaryColor),
-                GradientDirection.Vertical => new System.Drawing.Drawing2D.LinearGradientBrush(
-                    new Point(rect.Left, rect.Top), new Point(rect.Left, rect.Bottom),
-                    _settings.CustomPrimaryColor, _settings.CustomSecondaryColor),
-                GradientDirection.Diagonal => new System.Drawing.Drawing2D.LinearGradientBrush(
-                    new Point(rect.Left, rect.Top), new Point(rect.Right, rect.Bottom),
-                    _settings.CustomPrimaryColor, _settings.CustomSecondaryColor),
-                _ => new SolidBrush(_settings.CustomPrimaryColor)
-            };
+                using var brush = _settings.GradientDirection switch
+                {
+                    GradientDirection.Horizontal => new System.Drawing.Drawing2D.LinearGradientBrush(
+                        new Point(rect.Left, rect.Top), new Point(rect.Right, rect.Top),
+                        _settings.CustomPrimaryColor, _settings.CustomSecondaryColor),
+                    GradientDirection.Vertical => new System.Drawing.Drawing2D.LinearGradientBrush(
+                        new Point(rect.Left, rect.Top), new Point(rect.Left, rect.Bottom),
+                        _settings.CustomPrimaryColor, _settings.CustomSecondaryColor),
+                    GradientDirection.Diagonal => new System.Drawing.Drawing2D.LinearGradientBrush(
+                        new Point(rect.Left, rect.Top), new Point(rect.Right, rect.Bottom),
+                        _settings.CustomPrimaryColor, _settings.CustomSecondaryColor),
+                    _ => (Brush)new SolidBrush(_settings.CustomPrimaryColor)
+                };
+                e.Graphics.FillRectangle(brush, rect);
+            }
+            else if (_settings.UseCustomColors)
+            {
+                using var brush = new SolidBrush(_settings.CustomPrimaryColor);
+                e.Graphics.FillRectangle(brush, rect);
+            }
+
+            // Draw border
+            using var pen = new Pen(SystemColors.ControlDark);
+            e.Graphics.DrawRectangle(pen, 0, 0, rect.Width - 1, rect.Height - 1);
         }
 
         private void OnFrequencyBandsChanged(object? sender, EventArgs e)
@@ -974,12 +994,7 @@ namespace TaskbarEqualizer.Main
                 {
                     if (enable)
                     {
-                        var exePath = System.Reflection.Assembly.GetExecutingAssembly().Location;
-                        if (exePath.EndsWith(".dll"))
-                        {
-                            // If we're running from a dll, get the exe path
-                            exePath = exePath.Replace(".dll", ".exe");
-                        }
+                        var exePath = GetExecutablePath();
                         key.SetValue(valueName, $"\"{exePath}\"");
                     }
                     else
@@ -1097,12 +1112,7 @@ namespace TaskbarEqualizer.Main
                     {
                         if (enable)
                         {
-                            var exePath = System.Reflection.Assembly.GetExecutingAssembly().Location;
-                            if (exePath.EndsWith(".dll"))
-                            {
-                                // If we're running from a dll, get the exe path
-                                exePath = exePath.Replace(".dll", ".exe");
-                            }
+                            var exePath = GetExecutablePath();
                             key.SetValue(valueName, $"\"{exePath}\"");
                         }
                         else
@@ -1117,6 +1127,58 @@ namespace TaskbarEqualizer.Main
                     throw;
                 }
             });
+        }
+
+        private static string GetExecutablePath()
+        {
+            // Try different methods to get the executable path
+            
+            // Method 1: Process main module (most reliable for .exe)
+            try
+            {
+                using var currentProcess = System.Diagnostics.Process.GetCurrentProcess();
+                var mainModule = currentProcess.MainModule;
+                if (mainModule?.FileName != null && mainModule.FileName.EndsWith(".exe"))
+                {
+                    return mainModule.FileName;
+                }
+            }
+            catch { /* fallback to next method */ }
+
+            // Method 2: Assembly location with .dll to .exe conversion
+            try
+            {
+                var assemblyPath = System.Reflection.Assembly.GetExecutingAssembly().Location;
+                if (assemblyPath.EndsWith(".dll"))
+                {
+                    var exePath = assemblyPath.Replace(".dll", ".exe");
+                    if (System.IO.File.Exists(exePath))
+                    {
+                        return exePath;
+                    }
+                }
+                else if (assemblyPath.EndsWith(".exe"))
+                {
+                    return assemblyPath;
+                }
+            }
+            catch { /* fallback to next method */ }
+
+            // Method 3: Environment current directory + process name
+            try
+            {
+                var processName = System.Diagnostics.Process.GetCurrentProcess().ProcessName;
+                var currentDir = Environment.CurrentDirectory;
+                var exePath = System.IO.Path.Combine(currentDir, processName + ".exe");
+                if (System.IO.File.Exists(exePath))
+                {
+                    return exePath;
+                }
+            }
+            catch { /* fallback to assembly location */ }
+
+            // Fallback: Use assembly location as-is
+            return System.Reflection.Assembly.GetExecutingAssembly().Location;
         }
     }
 }

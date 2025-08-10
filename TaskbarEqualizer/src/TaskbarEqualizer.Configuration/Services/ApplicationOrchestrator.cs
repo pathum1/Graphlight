@@ -29,6 +29,7 @@ namespace TaskbarEqualizer.Configuration.Services
         private bool _isInitialized;
         private bool _disposed;
         private object? _mainWindow; // Will be set from the main program
+        private object? _spectrumWindow; // Reference to the spectrum analyzer window
 
         /// <summary>
         /// Initializes a new instance of the ApplicationOrchestrator.
@@ -110,6 +111,29 @@ namespace TaskbarEqualizer.Configuration.Services
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Failed to initialize main window with settings");
+            }
+        }
+
+        /// <summary>
+        /// Sets the spectrum window reference for visualization updates.
+        /// </summary>
+        /// <param name="spectrumWindow">The spectrum analyzer window instance.</param>
+        public void SetSpectrumWindow(object spectrumWindow)
+        {
+            _spectrumWindow = spectrumWindow;
+            _logger.LogInformation("Spectrum window reference set in orchestrator");
+            
+            // Initialize the spectrum window with current settings if available
+            try
+            {
+                if (_settingsManager.IsLoaded && _spectrumWindow != null)
+                {
+                    _ = Task.Run(async () => await UpdateSpectrumWindowSettings(_settingsManager.Settings));
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to initialize spectrum window with settings");
             }
         }
 
@@ -276,7 +300,7 @@ namespace TaskbarEqualizer.Configuration.Services
             // Connect audio capture to frequency analyzer
             _audioCaptureService.AudioDataAvailable += OnAudioDataAvailable;
 
-            // Connect frequency analyzer to taskbar overlay
+            // Connect frequency analyzer to taskbar overlay and spectrum window
             _frequencyAnalyzer.SpectrumDataAvailable += OnSpectrumDataAvailable;
 
             _logger.LogDebug("Audio processing pipeline configured");
@@ -298,7 +322,7 @@ namespace TaskbarEqualizer.Configuration.Services
         }
 
         /// <summary>
-        /// Handles spectrum data from the frequency analyzer and forwards to taskbar overlay and main window.
+        /// Handles spectrum data from the frequency analyzer and forwards to taskbar overlay and spectrum window.
         /// </summary>
         private void OnSpectrumDataAvailable(object? sender, SpectrumDataEventArgs e)
         {
@@ -317,7 +341,24 @@ namespace TaskbarEqualizer.Configuration.Services
                 // Update taskbar overlay
                 _taskbarOverlayManager.UpdateVisualization(e);
                 
-                // Only using taskbar overlay - no main window
+                // Update spectrum window if available
+                if (_spectrumWindow != null)
+                {
+                    try
+                    {
+                        var spectrumWindowType = _spectrumWindow.GetType();
+                        var updateMethod = spectrumWindowType.GetMethod("UpdateSpectrum");
+                        
+                        if (updateMethod != null)
+                        {
+                            updateMethod.Invoke(_spectrumWindow, new object[] { e });
+                        }
+                    }
+                    catch (Exception spectrumEx)
+                    {
+                        _logger.LogDebug(spectrumEx, "Error updating spectrum window visualization");
+                    }
+                }
             }
             catch (Exception ex)
             {
@@ -540,10 +581,11 @@ namespace TaskbarEqualizer.Configuration.Services
                     await UpdateFrequencyAnalyzerAsync(settings);
                 }
 
-                // Apply spectrum window updates to TaskbarOverlayManager
+                // Apply spectrum window updates to TaskbarOverlayManager and Spectrum Window
                 if (needsSpectrumWindowUpdate)
                 {
                     await UpdateTaskbarOverlaySettingsAsync(settings);
+                    await UpdateSpectrumWindowSettings(settings);
                 }
 
                 // Save settings after applying changes
@@ -620,10 +662,38 @@ namespace TaskbarEqualizer.Configuration.Services
         {
             try
             {
-                _logger.LogInformation("Opening settings interface");
+                _logger.LogInformation("Opening settings dialog");
                 
-                // For now, just log - in Phase 4 this would open a settings window
-                await Task.CompletedTask;
+                // We need to marshal to the UI thread for showing the dialog
+                if (System.Windows.Forms.Application.MessageLoop)
+                {
+                    // Already on UI thread
+                    ShowSettingsDialog();
+                }
+                else
+                {
+                    // Marshal to UI thread
+                    await Task.Run(() =>
+                    {
+                        if (System.Windows.Forms.Control.CheckForIllegalCrossThreadCalls)
+                        {
+                            // Find any form to invoke on
+                            var activeForm = System.Windows.Forms.Application.OpenForms.Cast<System.Windows.Forms.Form>().FirstOrDefault();
+                            if (activeForm != null && activeForm.InvokeRequired)
+                            {
+                                activeForm.Invoke(new Action(ShowSettingsDialog));
+                            }
+                            else
+                            {
+                                ShowSettingsDialog();
+                            }
+                        }
+                        else
+                        {
+                            ShowSettingsDialog();
+                        }
+                    });
+                }
                 
                 _logger.LogDebug("Settings menu action completed");
             }
@@ -631,6 +701,36 @@ namespace TaskbarEqualizer.Configuration.Services
             {
                 _logger.LogError(ex, "Failed to handle settings menu");
             }
+        }
+
+        /// <summary>
+        /// Shows the settings dialog on the UI thread.
+        /// </summary>
+        private void ShowSettingsDialog()
+        {
+            try
+            {
+                // Fire a custom event that the application context can handle
+                // This avoids complex dependency injection in the orchestrator
+                OnSettingsDialogRequested();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to request settings dialog");
+            }
+        }
+
+        /// <summary>
+        /// Event fired when settings dialog should be shown.
+        /// </summary>
+        public event EventHandler? SettingsDialogRequested;
+
+        /// <summary>
+        /// Fires the settings dialog requested event.
+        /// </summary>
+        private void OnSettingsDialogRequested()
+        {
+            SettingsDialogRequested?.Invoke(this, EventArgs.Empty);
         }
 
         /// <summary>
@@ -706,6 +806,54 @@ namespace TaskbarEqualizer.Configuration.Services
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Failed to update TaskbarOverlayManager with new settings");
+            }
+        }
+
+        /// <summary>
+        /// Updates the spectrum window with new visualization settings.
+        /// </summary>
+        /// <param name="settings">The updated application settings.</param>
+        private async Task UpdateSpectrumWindowSettings(ApplicationSettings settings)
+        {
+            try
+            {
+                if (_spectrumWindow == null)
+                {
+                    _logger.LogDebug("Spectrum window not available, skipping settings update");
+                    return;
+                }
+
+                _logger.LogInformation("Updating spectrum window with new settings");
+                
+                // Call UpdateSettings method on the spectrum window using reflection
+                var spectrumWindowType = _spectrumWindow.GetType();
+                var updateMethod = spectrumWindowType.GetMethod("UpdateSettings");
+                
+                if (updateMethod != null)
+                {
+                    // Check if we need to invoke on UI thread
+                    if (_spectrumWindow is System.Windows.Forms.Control control && control.InvokeRequired)
+                    {
+                        await Task.Run(() =>
+                        {
+                            control.Invoke(new Action(() => updateMethod.Invoke(_spectrumWindow, new object[] { settings })));
+                        });
+                    }
+                    else
+                    {
+                        updateMethod.Invoke(_spectrumWindow, new object[] { settings });
+                    }
+                    
+                    _logger.LogInformation("Spectrum window updated successfully with new settings");
+                }
+                else
+                {
+                    _logger.LogWarning("UpdateSettings method not found on spectrum window");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to update spectrum window with new settings");
             }
         }
 

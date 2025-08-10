@@ -539,6 +539,12 @@ namespace TaskbarEqualizer.SystemTray.ContextMenu
                 item => OnSettingsClicked(item)
             ).WithShortcut(Keys.Control | Keys.S);
 
+            var spectrumItem = ContextMenuItem.CreateStandard(
+                "spectrum",
+                "Show Spectrum Analyzer",
+                item => OnSpectrumClicked(item)
+            );
+
             var separatorItem1 = ContextMenuItem.CreateSeparator("separator1");
 
             var aboutItem = ContextMenuItem.CreateStandard(
@@ -555,7 +561,7 @@ namespace TaskbarEqualizer.SystemTray.ContextMenu
                 item => OnExitClicked(item)
             ).WithShortcut(Keys.Alt | Keys.F4);
 
-            _menuItems.AddRange(new[] { autoStartItem, separatorItem1, settingsItem, separatorItem2, aboutItem, exitItem });
+            _menuItems.AddRange(new[] { autoStartItem, separatorItem1, settingsItem, spectrumItem, separatorItem2, aboutItem, exitItem });
 
             // Add items to the menu strip
             if (_contextMenu != null)
@@ -738,7 +744,15 @@ namespace TaskbarEqualizer.SystemTray.ContextMenu
         private void OnSettingsClicked(IContextMenuItem menuItem)
         {
             _logger.LogInformation("Settings menu item clicked");
-            // Settings dialog will be implemented later
+            // The settings logic is handled by the ApplicationOrchestrator through the MenuItemClicked event
+            // This method exists primarily for direct action handling if needed
+        }
+
+        private void OnSpectrumClicked(IContextMenuItem menuItem)
+        {
+            _logger.LogInformation("Spectrum analyzer menu item clicked");
+            // The spectrum window logic is handled by the ApplicationContext through the MenuItemClicked event
+            // This method exists primarily for direct action handling if needed
         }
 
         private void OnAboutClicked(IContextMenuItem menuItem)

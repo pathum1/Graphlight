@@ -22,6 +22,7 @@ namespace TaskbarEqualizer.Main
         private readonly bool _isMinimized;
         private Timer _initTimer;
         private IContextMenuManager? _contextMenuManager;
+        private SpectrumAnalyzerWindow? _spectrumWindow;
 
         public TaskbarEqualizerApplicationContext(
             ISystemTrayManager systemTrayManager,
@@ -75,6 +76,15 @@ namespace TaskbarEqualizer.Main
                 //     _systemTrayManager.SetContextMenuStrip(_contextMenuManager.ContextMenuStrip);
                 //     _logger.LogInformation("Context menu strip assigned to system tray icon");
                 // }
+
+                // Create and register spectrum window with orchestrator
+                _spectrumWindow = new SpectrumAnalyzerWindow(
+                    _serviceProvider.GetRequiredService<ILogger<SpectrumAnalyzerWindow>>());
+                _orchestrator.SetSpectrumWindow(_spectrumWindow);
+                _logger.LogInformation("Spectrum window created and registered with orchestrator");
+
+                // Wire up orchestrator events
+                _orchestrator.SettingsDialogRequested += OnSettingsDialogRequested;
 
                 // Start the orchestrator after system tray is ready
                 await _orchestrator.StartAsync(default);
@@ -150,6 +160,10 @@ namespace TaskbarEqualizer.Main
                         _logger.LogInformation("Settings requested from context menu");
                         ShowSettingsDialog();
                         break;
+                    case "spectrum":
+                        _logger.LogInformation("Spectrum window requested from context menu");
+                        ShowSpectrumWindow();
+                        break;
                     default:
                         _logger.LogDebug("Unhandled menu item: {ItemId}", e.MenuItem.Id);
                         break;
@@ -159,6 +173,15 @@ namespace TaskbarEqualizer.Main
             {
                 _logger.LogError(ex, "Error handling menu item click: {ItemId}", e.MenuItem.Id);
             }
+        }
+
+        /// <summary>
+        /// Handles settings dialog request from orchestrator.
+        /// </summary>
+        private void OnSettingsDialogRequested(object? sender, EventArgs e)
+        {
+            _logger.LogInformation("Settings dialog requested by orchestrator");
+            ShowSettingsDialog();
         }
 
         /// <summary>
@@ -182,6 +205,34 @@ namespace TaskbarEqualizer.Main
                 MessageBox.Show(
                     $"Failed to open settings dialog: {ex.Message}",
                     "Settings Error",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+            }
+        }
+
+        /// <summary>
+        /// Shows the spectrum analyzer window.
+        /// </summary>
+        private void ShowSpectrumWindow()
+        {
+            try
+            {
+                if (_spectrumWindow != null)
+                {
+                    _spectrumWindow.ShowWindow();
+                    _logger.LogInformation("Spectrum window shown");
+                }
+                else
+                {
+                    _logger.LogWarning("Spectrum window not available");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to show spectrum window");
+                MessageBox.Show(
+                    $"Failed to open spectrum window: {ex.Message}",
+                    "Spectrum Window Error",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Error);
             }
@@ -222,8 +273,13 @@ namespace TaskbarEqualizer.Main
                 {
                     _contextMenuManager.MenuItemClicked -= OnMenuItemClicked;
                 }
+                if (_orchestrator != null)
+                {
+                    _orchestrator.SettingsDialogRequested -= OnSettingsDialogRequested;
+                }
 
                 // Clean up resources
+                _spectrumWindow?.Dispose();
                 _contextMenuManager?.Dispose();
                 _systemTrayManager?.Dispose();
                 _orchestrator?.Dispose();

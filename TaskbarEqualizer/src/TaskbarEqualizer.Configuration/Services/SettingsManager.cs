@@ -727,6 +727,17 @@ namespace TaskbarEqualizer.Configuration.Services
                 _isDirty = true;
             }
 
+            // Fire the SettingsChanged event with the specific property that changed
+            if (!string.IsNullOrEmpty(e.PropertyName))
+            {
+                var settingsChangedArgs = new SettingsChangedEventArgs(
+                    new List<string> { e.PropertyName }, 
+                    SettingsChangeReason.UserModified);
+                SettingsChanged?.Invoke(this, settingsChangedArgs);
+                
+                _logger.LogDebug("Settings property {PropertyName} changed, fired SettingsChanged event", e.PropertyName);
+            }
+
             OnPropertyChanged(e.PropertyName);
         }
 

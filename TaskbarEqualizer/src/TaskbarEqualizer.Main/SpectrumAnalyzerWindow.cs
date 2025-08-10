@@ -1,10 +1,13 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Linq;
 using System.Windows.Forms;
 using Microsoft.Extensions.Logging;
 using TaskbarEqualizer.Core.Interfaces;
+using TaskbarEqualizer.Configuration;
+using TaskbarEqualizer.SystemTray.Interfaces;
 
 namespace TaskbarEqualizer.Main
 {
@@ -16,8 +19,10 @@ namespace TaskbarEqualizer.Main
         private readonly ILogger<SpectrumAnalyzerWindow> _logger;
         private SpectrumDataEventArgs? _currentSpectrum;
         private Timer? _refreshTimer;
-        private float[] _smoothedSpectrum = new float[32];
-        private readonly float _smoothingFactor = 0.7f;
+        private float[] _smoothedSpectrum = new float[16]; // Default to 16 bands from ApplicationSettings
+        private float _smoothingFactor = 0.8f; // Default from ApplicationSettings
+        private double _gainFactor = 1.0; // Default from ApplicationSettings
+        private ApplicationSettings? _settings;
 
         public SpectrumAnalyzerWindow(ILogger<SpectrumAnalyzerWindow> logger)
         {
@@ -25,6 +30,15 @@ namespace TaskbarEqualizer.Main
             InitializeComponent();
             SetupWindow();
             StartRefreshTimer();
+        }
+
+        /// <summary>
+        /// Initializes the spectrum window with application settings.
+        /// </summary>
+        /// <param name="settings">The application settings to use.</param>
+        public void InitializeWithSettings(ApplicationSettings settings)
+        {
+            UpdateSettings(settings);
         }
 
         private void InitializeComponent()
@@ -115,7 +129,7 @@ namespace TaskbarEqualizer.Main
         {
             _refreshTimer = new Timer
             {
-                Interval = 33 // ~30 FPS
+                Interval = (int)(_settings?.UpdateInterval ?? 16.67) // Use settings or default ~60 FPS
             };
             _refreshTimer.Tick += RefreshTimer_Tick;
             _refreshTimer.Start();
@@ -171,26 +185,78 @@ namespace TaskbarEqualizer.Main
             var barWidth = (float)clientRect.Width / barCount;
             var maxHeight = clientRect.Height - 60; // Leave space for info text
 
-            // Create gradient brushes for the bars
-            using var brush = new LinearGradientBrush(
-                new Rectangle(0, 0, clientRect.Width, maxHeight),
-                Color.FromArgb(0, 255, 100),    // Green at bottom
-                Color.FromArgb(255, 100, 0),    // Red at top
-                LinearGradientMode.Vertical);
-
-            // Draw frequency bars
-            for (int i = 0; i < barCount; i++)
+            // Determine colors based on settings
+            Color primaryColor, secondaryColor;
+            if (_settings?.UseCustomColors == true)
             {
-                var level = Math.Max(0, Math.Min(1, _smoothedSpectrum[i]));
-                var barHeight = (int)(level * maxHeight);
-                
-                if (barHeight > 0)
+                primaryColor = _settings.CustomPrimaryColor;
+                secondaryColor = _settings.CustomSecondaryColor;
+            }
+            else
+            {
+                // Default colors (green to red)
+                primaryColor = Color.FromArgb(0, 255, 100);    // Green at bottom
+                secondaryColor = Color.FromArgb(255, 100, 0);  // Red at top
+            }
+
+            // Check visualization style
+            var visualizationStyle = _settings?.VisualizationStyle ?? EqualizerStyle.Bars;
+
+            switch (visualizationStyle)
+            {
+                case EqualizerStyle.Bars:
+                    DrawBars(g, clientRect, barCount, barWidth, maxHeight, primaryColor, secondaryColor);
+                    break;
+                case EqualizerStyle.Dots:
+                    DrawDots(g, clientRect, barCount, barWidth, maxHeight, primaryColor, secondaryColor);
+                    break;
+                case EqualizerStyle.Waveform:
+                    DrawWaveform(g, clientRect, maxHeight, primaryColor, secondaryColor);
+                    break;
+                default:
+                    DrawBars(g, clientRect, barCount, barWidth, maxHeight, primaryColor, secondaryColor);
+                    break;
+            }
+        }
+
+        private void DrawBars(Graphics g, Rectangle clientRect, int barCount, float barWidth, int maxHeight, Color primaryColor, Color secondaryColor)
+        {
+            // Create brush based on gradient settings
+            Brush brush;
+            if (_settings?.EnableGradient == true)
+            {
+                var gradientMode = _settings.GradientDirection switch
                 {
-                    var x = i * barWidth;
-                    var y = clientRect.Height - 40 - barHeight; // 40px from bottom for info
-                    var width = Math.Max(1, barWidth - 2); // 2px gap between bars
+                    GradientDirection.Horizontal => LinearGradientMode.Horizontal,
+                    GradientDirection.Diagonal => LinearGradientMode.ForwardDiagonal,
+                    _ => LinearGradientMode.Vertical
+                };
+                
+                brush = new LinearGradientBrush(
+                    new Rectangle(0, 0, clientRect.Width, maxHeight),
+                    primaryColor, secondaryColor, gradientMode);
+            }
+            else
+            {
+                brush = new SolidBrush(primaryColor);
+            }
+
+            using (brush)
+            {
+                // Draw frequency bars
+                for (int i = 0; i < barCount; i++)
+                {
+                    var level = Math.Max(0, Math.Min(1, _smoothedSpectrum[i] * (float)_gainFactor));
+                    var barHeight = (int)(level * maxHeight);
                     
-                    g.FillRectangle(brush, x, y, width, barHeight);
+                    if (barHeight > 0)
+                    {
+                        var x = i * barWidth;
+                        var y = clientRect.Height - 40 - barHeight; // 40px from bottom for info
+                        var width = Math.Max(1, barWidth - 2); // 2px gap between bars
+                        
+                        g.FillRectangle(brush, x, y, width, barHeight);
+                    }
                 }
             }
 
@@ -198,7 +264,7 @@ namespace TaskbarEqualizer.Main
             using var peakPen = new Pen(Color.White, 1);
             for (int i = 0; i < barCount; i++)
             {
-                var level = Math.Max(0, Math.Min(1, _smoothedSpectrum[i]));
+                var level = Math.Max(0, Math.Min(1, _smoothedSpectrum[i] * (float)_gainFactor));
                 if (level > 0.1f) // Only show peaks above threshold
                 {
                     var peakHeight = (int)(level * maxHeight);
@@ -209,6 +275,98 @@ namespace TaskbarEqualizer.Main
                     g.DrawLine(peakPen, x, y, x + width, y);
                 }
             }
+        }
+
+        private void DrawDots(Graphics g, Rectangle clientRect, int barCount, float barWidth, int maxHeight, Color primaryColor, Color secondaryColor)
+        {
+            var dotSize = Math.Max(2, Math.Min(8, barWidth * 0.6f)); // Dot size based on available width
+            
+            for (int i = 0; i < barCount; i++)
+            {
+                var level = Math.Max(0, Math.Min(1, _smoothedSpectrum[i] * (float)_gainFactor));
+                var numDots = (int)(level * (maxHeight / (dotSize + 2))); // Number of dots based on level
+                
+                var x = i * barWidth + (barWidth - dotSize) / 2; // Center dot in bar space
+                
+                for (int d = 0; d < numDots; d++)
+                {
+                    var y = clientRect.Height - 40 - (d * (dotSize + 2)) - dotSize;
+                    
+                    // Color interpolation for gradient effect
+                    Color dotColor;
+                    if (_settings?.EnableGradient == true)
+                    {
+                        var ratio = (float)d / Math.Max(1, numDots - 1);
+                        dotColor = InterpolateColor(primaryColor, secondaryColor, ratio);
+                    }
+                    else
+                    {
+                        dotColor = primaryColor;
+                    }
+                    
+                    using var brush = new SolidBrush(dotColor);
+                    g.FillEllipse(brush, x, y, dotSize, dotSize);
+                }
+            }
+        }
+
+        private void DrawWaveform(Graphics g, Rectangle clientRect, int maxHeight, Color primaryColor, Color secondaryColor)
+        {
+            if (_smoothedSpectrum.Length < 2) return;
+
+            var points = new List<PointF>();
+            var barCount = _smoothedSpectrum.Length;
+            var stepX = (float)clientRect.Width / (barCount - 1);
+
+            // Create waveform points
+            for (int i = 0; i < barCount; i++)
+            {
+                var level = Math.Max(0, Math.Min(1, _smoothedSpectrum[i] * (float)_gainFactor));
+                var x = i * stepX;
+                var y = clientRect.Height - 40 - (level * maxHeight); // 40px from bottom for info
+                points.Add(new PointF(x, y));
+            }
+
+            // Draw the waveform
+            if (points.Count >= 2)
+            {
+                var penWidth = Math.Max(1, clientRect.Width / 200); // Adaptive pen width
+                using var pen = new Pen(primaryColor, penWidth);
+                
+                // Smooth curve if we have enough points
+                if (points.Count >= 3)
+                {
+                    g.DrawCurve(pen, points.ToArray());
+                }
+                else
+                {
+                    g.DrawLines(pen, points.ToArray());
+                }
+
+                // Optional: fill under the curve
+                if (_settings?.EnableEffects == true)
+                {
+                    // Add baseline points for filling
+                    var fillPoints = new List<PointF>(points);
+                    fillPoints.Add(new PointF(clientRect.Width, clientRect.Height - 40));
+                    fillPoints.Add(new PointF(0, clientRect.Height - 40));
+
+                    using var fillBrush = new SolidBrush(Color.FromArgb(64, primaryColor)); // Semi-transparent
+                    g.FillPolygon(fillBrush, fillPoints.ToArray());
+                }
+            }
+        }
+
+        private static Color InterpolateColor(Color start, Color end, float ratio)
+        {
+            ratio = Math.Max(0, Math.Min(1, ratio));
+            
+            var r = (int)(start.R + (end.R - start.R) * ratio);
+            var g = (int)(start.G + (end.G - start.G) * ratio);
+            var b = (int)(start.B + (end.B - start.B) * ratio);
+            var a = (int)(start.A + (end.A - start.A) * ratio);
+            
+            return Color.FromArgb(a, r, g, b);
         }
 
         private void DrawNoAudioMessage(Graphics g)
@@ -247,6 +405,65 @@ namespace TaskbarEqualizer.Main
             g.FillRectangle(bgBrush, x - 5, y - 5, textSize.Width + 10, textSize.Height + 10);
             
             g.DrawString(infoText, font, brush, x, y);
+        }
+
+        /// <summary>
+        /// Updates the spectrum window with new settings.
+        /// </summary>
+        /// <param name="settings">The updated application settings.</param>
+        public void UpdateSettings(ApplicationSettings settings)
+        {
+            try
+            {
+                _settings = settings ?? throw new ArgumentNullException(nameof(settings));
+                
+                _logger.LogInformation("Updating spectrum window settings");
+
+                // Update frequency bands - resize smoothed spectrum array if needed
+                if (_smoothedSpectrum.Length != settings.FrequencyBands)
+                {
+                    _logger.LogInformation("Resizing spectrum array from {OldSize} to {NewSize}", 
+                        _smoothedSpectrum.Length, settings.FrequencyBands);
+                    
+                    var newSpectrum = new float[settings.FrequencyBands];
+                    
+                    // Copy existing data if possible
+                    var copyLength = Math.Min(_smoothedSpectrum.Length, newSpectrum.Length);
+                    Array.Copy(_smoothedSpectrum, newSpectrum, copyLength);
+                    
+                    _smoothedSpectrum = newSpectrum;
+                }
+
+                // Update smoothing factor
+                _smoothingFactor = (float)settings.SmoothingFactor;
+                _logger.LogDebug("Updated smoothing factor to: {SmoothingFactor}", _smoothingFactor);
+
+                // Update gain factor
+                _gainFactor = settings.GainFactor;
+                _logger.LogDebug("Updated gain factor to: {GainFactor}", _gainFactor);
+
+                // Update refresh timer interval
+                if (_refreshTimer != null)
+                {
+                    var newInterval = (int)settings.UpdateInterval;
+                    if (_refreshTimer.Interval != newInterval)
+                    {
+                        _refreshTimer.Stop();
+                        _refreshTimer.Interval = newInterval;
+                        _refreshTimer.Start();
+                        _logger.LogDebug("Updated refresh interval to: {Interval}ms", newInterval);
+                    }
+                }
+
+                // Force a redraw with new settings
+                Invalidate();
+                
+                _logger.LogInformation("Spectrum window settings updated successfully");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to update spectrum window settings");
+            }
         }
 
         protected override void Dispose(bool disposing)

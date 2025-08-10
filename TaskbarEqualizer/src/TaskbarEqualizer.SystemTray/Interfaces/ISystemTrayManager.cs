@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.Drawing;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Windows.Forms;
 
 namespace TaskbarEqualizer.SystemTray.Interfaces
 {
@@ -109,6 +110,12 @@ namespace TaskbarEqualizer.SystemTray.Interfaces
         /// </summary>
         /// <param name="enabled">Whether context menu should be enabled.</param>
         void SetContextMenuEnabled(bool enabled);
+
+        /// <summary>
+        /// Sets the context menu strip for the tray icon for direct Windows Forms integration.
+        /// </summary>
+        /// <param name="contextMenuStrip">Context menu strip to assign.</param>
+        void SetContextMenuStrip(ContextMenuStrip contextMenuStrip);
 
         /// <summary>
         /// Gets the current position of the tray icon on screen.

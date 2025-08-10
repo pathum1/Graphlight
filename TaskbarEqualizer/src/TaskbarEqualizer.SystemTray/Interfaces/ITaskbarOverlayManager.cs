@@ -66,6 +66,14 @@ namespace TaskbarEqualizer.SystemTray.Interfaces
         /// Refreshes the taskbar position and adjusts overlay accordingly.
         /// </summary>
         Task RefreshTaskbarPositionAsync();
+
+        /// <summary>
+        /// Updates the overlay with new application settings that affect visualization.
+        /// </summary>
+        /// <param name="settings">Application settings containing visualization parameters.</param>
+        /// <param name="cancellationToken">Cancellation token for the operation.</param>
+        /// <returns>Task representing the asynchronous update.</returns>
+        Task UpdateSettingsAsync(object settings, CancellationToken cancellationToken = default);
     }
 
     /// <summary>

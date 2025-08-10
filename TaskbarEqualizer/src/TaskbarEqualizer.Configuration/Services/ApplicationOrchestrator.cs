@@ -1,6 +1,8 @@
 using System;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Windows.Forms;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using TaskbarEqualizer.Configuration.Interfaces;
@@ -27,6 +29,8 @@ namespace TaskbarEqualizer.Configuration.Services
         private bool _isInitialized;
         private bool _disposed;
         private object? _mainWindow; // Will be set from the main program
+        private object? _spectrumWindow; // Reference to the spectrum analyzer window
+        private bool _isSettingsDialogOpen; // Flag to prevent dialog re-opening
 
         /// <summary>
         /// Initializes a new instance of the ApplicationOrchestrator.
@@ -89,6 +93,49 @@ namespace TaskbarEqualizer.Configuration.Services
         public void SetMainWindow(object mainWindow)
         {
             _mainWindow = mainWindow;
+            
+            // Initialize the spectrum window with current settings if available
+            try
+            {
+                if (_settingsManager.IsLoaded && _mainWindow != null)
+                {
+                    var windowType = _mainWindow.GetType();
+                    var initMethod = windowType.GetMethod("InitializeWithSettings");
+                    
+                    if (initMethod != null)
+                    {
+                        initMethod.Invoke(_mainWindow, new object[] { _settingsManager.Settings });
+                        _logger.LogInformation("Main window initialized with current settings");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to initialize main window with settings");
+            }
+        }
+
+        /// <summary>
+        /// Sets the spectrum window reference for visualization updates.
+        /// </summary>
+        /// <param name="spectrumWindow">The spectrum analyzer window instance.</param>
+        public void SetSpectrumWindow(object spectrumWindow)
+        {
+            _spectrumWindow = spectrumWindow;
+            _logger.LogInformation("Spectrum window reference set in orchestrator");
+            
+            // Initialize the spectrum window with current settings if available
+            try
+            {
+                if (_settingsManager.IsLoaded && _spectrumWindow != null)
+                {
+                    _ = Task.Run(async () => await UpdateSpectrumWindowSettings(_settingsManager.Settings));
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to initialize spectrum window with settings");
+            }
         }
 
         #endregion
@@ -106,11 +153,8 @@ namespace TaskbarEqualizer.Configuration.Services
 
             try
             {
-                // Initialize all components in sequence
+                // Initialize all components in sequence (event handlers set up inside)
                 await InitializeComponentsAsync(stoppingToken);
-
-                // Setup event handlers and cross-component communication
-                SetupEventHandlers();
 
                 // Validate auto-start configuration
                 await ValidateAutoStartConfigurationAsync(stoppingToken);
@@ -192,15 +236,17 @@ namespace TaskbarEqualizer.Configuration.Services
                 _logger.LogDebug("Settings loaded by orchestrator");
             }
 
-            // 2. Initialize context menu (no async initialization needed)
-            _logger.LogDebug("Context menu manager ready");
+            // 2. Initialize context menu manager
+            await _contextMenuManager.InitializeAsync(cancellationToken);
+            _logger.LogDebug("Context menu manager initialized");
 
-            // 3. Initialize frequency analyzer
+            // 3. Initialize frequency analyzer with settings-based configuration
+            var settings = _settingsManager.Settings;
             await _frequencyAnalyzer.ConfigureAsync(
                 fftSize: 2048,
                 sampleRate: 44100,
-                frequencyBands: 32,
-                smoothingFactor: 0.3, // Changed from 0.8 to 0.3 for better responsiveness
+                frequencyBands: settings.FrequencyBands,
+                smoothingFactor: settings.SmoothingFactor,
                 cancellationToken);
             _logger.LogDebug("Frequency analyzer configured");
 
@@ -237,8 +283,9 @@ namespace TaskbarEqualizer.Configuration.Services
             await _taskbarOverlayManager.ShowAsync(cancellationToken);
             _logger.LogDebug("Taskbar overlay shown");
 
-            // 10. Check auto-start status
+            // 10. Check auto-start status and sync with context menu
             var autoStartEnabled = await _autoStartManager.IsAutoStartEnabledAsync(cancellationToken);
+            await _contextMenuManager.SetMenuItemCheckedAsync("autostart", autoStartEnabled, cancellationToken);
             _logger.LogDebug("Auto-start status checked: {Enabled}", autoStartEnabled);
 
             _logger.LogDebug("All Phase 3 components initialized successfully");
@@ -254,7 +301,7 @@ namespace TaskbarEqualizer.Configuration.Services
             // Connect audio capture to frequency analyzer
             _audioCaptureService.AudioDataAvailable += OnAudioDataAvailable;
 
-            // Connect frequency analyzer to taskbar overlay
+            // Connect frequency analyzer to taskbar overlay and spectrum window
             _frequencyAnalyzer.SpectrumDataAvailable += OnSpectrumDataAvailable;
 
             _logger.LogDebug("Audio processing pipeline configured");
@@ -276,12 +323,45 @@ namespace TaskbarEqualizer.Configuration.Services
         }
 
         /// <summary>
-        /// Handles spectrum data from the frequency analyzer and forwards to taskbar overlay and main window.
+        /// Handles spectrum data from the frequency analyzer and forwards to taskbar overlay and spectrum window.
         /// </summary>
         private void OnSpectrumDataAvailable(object? sender, SpectrumDataEventArgs e)
         {
             try
             {
+                // Apply volume threshold gating
+                var settings = _settingsManager.Settings;
+                if (settings.VolumeThreshold > 0 && e.RmsLevel < settings.VolumeThreshold)
+                {
+                    // Volume is below threshold, send empty spectrum data to hide visualization
+                    var emptySpectrum = new SpectrumDataEventArgs(
+                        new double[e.Spectrum?.Length ?? 16], // Empty spectrum array
+                        0, // No bands
+                        0.0, // No peak
+                        0, // No peak band index
+                        e.TimestampTicks,
+                        e.ProcessingLatency,
+                        0.0 // No RMS
+                    );
+                    
+                    _taskbarOverlayManager.UpdateVisualization(emptySpectrum);
+                    
+                    if (_spectrumWindow != null)
+                    {
+                        try
+                        {
+                            var spectrumWindowType = _spectrumWindow.GetType();
+                            var updateMethod = spectrumWindowType.GetMethod("UpdateSpectrum");
+                            updateMethod?.Invoke(_spectrumWindow, new object[] { emptySpectrum });
+                        }
+                        catch (Exception spectrumEx)
+                        {
+                            _logger.LogDebug(spectrumEx, "Error updating spectrum window with threshold data");
+                        }
+                    }
+                    return;
+                }
+
                 // Reduce logging frequency for performance - only log significant changes
                 var shouldLog = _logger.IsEnabled(Microsoft.Extensions.Logging.LogLevel.Trace) || 
                                (e.PeakValue > 0.1 && DateTime.Now.Millisecond % 500 < 50);
@@ -295,7 +375,24 @@ namespace TaskbarEqualizer.Configuration.Services
                 // Update taskbar overlay
                 _taskbarOverlayManager.UpdateVisualization(e);
                 
-                // Only using taskbar overlay - no main window
+                // Update spectrum window if available
+                if (_spectrumWindow != null)
+                {
+                    try
+                    {
+                        var spectrumWindowType = _spectrumWindow.GetType();
+                        var updateMethod = spectrumWindowType.GetMethod("UpdateSpectrum");
+                        
+                        if (updateMethod != null)
+                        {
+                            updateMethod.Invoke(_spectrumWindow, new object[] { e });
+                        }
+                    }
+                    catch (Exception spectrumEx)
+                    {
+                        _logger.LogDebug(spectrumEx, "Error updating spectrum window visualization");
+                    }
+                }
             }
             catch (Exception ex)
             {
@@ -448,11 +545,16 @@ namespace TaskbarEqualizer.Configuration.Services
             try
             {
                 _logger.LogDebug("Settings changed: {ChangedKeys}", string.Join(", ", e.ChangedKeys));
+                
+                // Note: We removed the _isSettingsDialogOpen check here because:
+                // 1. We DO want settings to be applied when the user clicks Apply
+                // 2. The settings dialog uses cloned settings to prevent unwanted events during editing
+                // 3. The only events that should reach here are from actual Apply operations
+                var settings = _settingsManager.Settings;
 
                 // Handle auto-start setting changes
                 if (e.ChangedKeys.Contains("StartWithWindows"))
                 {
-                    var settings = _settingsManager.Settings;
                     if (settings.StartWithWindows)
                     {
                         await _autoStartManager.EnableAutoStartAsync();
@@ -464,6 +566,89 @@ namespace TaskbarEqualizer.Configuration.Services
                         _logger.LogInformation("Auto-start disabled via settings");
                     }
                 }
+
+                // Handle audio device settings changes
+                var needsAudioCaptureUpdate = false;
+                if (e.ChangedKeys.Contains("SelectedAudioDevice"))
+                {
+                    needsAudioCaptureUpdate = true;
+                    _logger.LogInformation("Selected audio device changed to: {AudioDevice}", settings.SelectedAudioDevice);
+                }
+
+                // Handle spectrum analyzer settings changes
+                var needsFrequencyAnalyzerUpdate = false;
+                var needsSpectrumWindowUpdate = false;
+
+                if (e.ChangedKeys.Contains("FrequencyBands"))
+                {
+                    needsFrequencyAnalyzerUpdate = true;
+                    needsSpectrumWindowUpdate = true;
+                    _logger.LogInformation("Frequency bands changed to: {FrequencyBands}", settings.FrequencyBands);
+                }
+
+                if (e.ChangedKeys.Contains("SmoothingFactor"))
+                {
+                    needsFrequencyAnalyzerUpdate = true;
+                    needsSpectrumWindowUpdate = true;
+                    _logger.LogInformation("Smoothing factor changed to: {SmoothingFactor}", settings.SmoothingFactor);
+                }
+
+                if (e.ChangedKeys.Contains("UpdateInterval"))
+                {
+                    needsSpectrumWindowUpdate = true;
+                    _logger.LogInformation("Update interval changed to: {UpdateInterval}ms", settings.UpdateInterval);
+                }
+
+                if (e.ChangedKeys.Contains("GainFactor"))
+                {
+                    needsSpectrumWindowUpdate = true;
+                    _logger.LogInformation("Gain factor changed to: {GainFactor}", settings.GainFactor);
+                }
+
+                if (e.ChangedKeys.Contains("VolumeThreshold"))
+                {
+                    needsSpectrumWindowUpdate = true;
+                    _logger.LogInformation("Volume threshold changed to: {VolumeThreshold}", settings.VolumeThreshold);
+                }
+
+                // Additional visualization settings that require overlay updates
+                var visualizationSettings = new[]
+                {
+                    "IconSize", "VisualizationStyle", "RenderQuality", "EnableAnimations", 
+                    "EnableEffects", "UseCustomColors", "CustomPrimaryColor", "CustomSecondaryColor",
+                    "EnableGradient", "GradientDirection", "Opacity", "AnimationSpeed",
+                    "EnableBeatDetection", "EnableSpringPhysics", "SpringStiffness", 
+                    "SpringDamping", "ChangeThreshold", "AdaptiveQuality", "MaxFrameRate"
+                };
+
+                if (visualizationSettings.Any(setting => e.ChangedKeys.Contains(setting)))
+                {
+                    needsSpectrumWindowUpdate = true;
+                    var changedVizSettings = visualizationSettings.Where(setting => e.ChangedKeys.Contains(setting));
+                    _logger.LogInformation("Visualization settings changed: {Settings}", string.Join(", ", changedVizSettings));
+                }
+
+                // Apply audio capture updates
+                if (needsAudioCaptureUpdate)
+                {
+                    await UpdateAudioCaptureSettings(settings);
+                }
+
+                // Apply frequency analyzer updates
+                if (needsFrequencyAnalyzerUpdate)
+                {
+                    await UpdateFrequencyAnalyzerAsync(settings);
+                }
+
+                // Apply spectrum window updates to TaskbarOverlayManager and Spectrum Window
+                if (needsSpectrumWindowUpdate)
+                {
+                    await UpdateTaskbarOverlaySettingsAsync(settings);
+                    await UpdateSpectrumWindowSettings(settings);
+                }
+
+                // Save settings after applying changes
+                await _settingsManager.SaveAsync();
             }
             catch (Exception ex)
             {
@@ -490,6 +675,10 @@ namespace TaskbarEqualizer.Configuration.Services
                     await _settingsManager.SetSetting("StartWithWindows", e.IsEnabled);
                     _logger.LogDebug("Updated StartWithWindows setting to match auto-start status");
                 }
+
+                // Sync context menu item state
+                await _contextMenuManager.SetMenuItemCheckedAsync("autostart", e.IsEnabled);
+                _logger.LogDebug("Updated context menu auto-start item to match status");
             }
             catch (Exception ex)
             {
@@ -532,10 +721,38 @@ namespace TaskbarEqualizer.Configuration.Services
         {
             try
             {
-                _logger.LogInformation("Opening settings interface");
+                _logger.LogInformation("Opening settings dialog");
                 
-                // For now, just log - in Phase 4 this would open a settings window
-                await Task.CompletedTask;
+                // We need to marshal to the UI thread for showing the dialog
+                if (System.Windows.Forms.Application.MessageLoop)
+                {
+                    // Already on UI thread
+                    ShowSettingsDialog();
+                }
+                else
+                {
+                    // Marshal to UI thread
+                    await Task.Run(() =>
+                    {
+                        if (System.Windows.Forms.Control.CheckForIllegalCrossThreadCalls)
+                        {
+                            // Find any form to invoke on
+                            var activeForm = System.Windows.Forms.Application.OpenForms.Cast<System.Windows.Forms.Form>().FirstOrDefault();
+                            if (activeForm != null && activeForm.InvokeRequired)
+                            {
+                                activeForm.Invoke(new Action(ShowSettingsDialog));
+                            }
+                            else
+                            {
+                                ShowSettingsDialog();
+                            }
+                        }
+                        else
+                        {
+                            ShowSettingsDialog();
+                        }
+                    });
+                }
                 
                 _logger.LogDebug("Settings menu action completed");
             }
@@ -543,6 +760,52 @@ namespace TaskbarEqualizer.Configuration.Services
             {
                 _logger.LogError(ex, "Failed to handle settings menu");
             }
+        }
+
+        /// <summary>
+        /// Shows the settings dialog on the UI thread.
+        /// </summary>
+        private void ShowSettingsDialog()
+        {
+            try
+            {
+                // Fire a custom event that the application context can handle
+                // This avoids complex dependency injection in the orchestrator
+                OnSettingsDialogRequested();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to request settings dialog");
+            }
+        }
+
+        /// <summary>
+        /// Event fired when settings dialog should be shown.
+        /// </summary>
+        public event EventHandler? SettingsDialogRequested;
+
+        /// <summary>
+        /// Fires the settings dialog requested event.
+        /// </summary>
+        private void OnSettingsDialogRequested()
+        {
+            if (_isSettingsDialogOpen)
+            {
+                _logger.LogDebug("Settings dialog already open, ignoring duplicate request");
+                return;
+            }
+
+            _isSettingsDialogOpen = true;
+            SettingsDialogRequested?.Invoke(this, EventArgs.Empty);
+        }
+
+        /// <summary>
+        /// Marks the settings dialog as closed to allow future requests.
+        /// </summary>
+        public void OnSettingsDialogClosed()
+        {
+            _isSettingsDialogOpen = false;
+            _logger.LogDebug("Settings dialog marked as closed");
         }
 
         /// <summary>
@@ -562,13 +825,141 @@ namespace TaskbarEqualizer.Configuration.Services
                     _logger.LogDebug("Saved pending settings before exit");
                 }
 
-                // In Phase 4, this would trigger application shutdown
-                // For now, just log the request
-                _logger.LogInformation("Exit request processed successfully");
+                // Trigger application shutdown
+                _logger.LogInformation("Initiating application shutdown...");
+                
+                // Use Application.Exit() to properly close the Windows Forms message loop
+                Application.Exit();
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error during application exit");
+            }
+        }
+
+        /// <summary>
+        /// Updates the audio capture service with new settings.
+        /// </summary>
+        /// <param name="settings">The updated application settings.</param>
+        private async Task UpdateAudioCaptureSettings(ApplicationSettings settings)
+        {
+            try
+            {
+                _logger.LogInformation("Updating audio capture settings");
+
+                // Handle device switching if a specific device is selected
+                if (!string.IsNullOrEmpty(settings.SelectedAudioDevice))
+                {
+                    var availableDevices = _audioCaptureService.GetAvailableDevices();
+                    var targetDevice = availableDevices.FirstOrDefault(d => d.ID == settings.SelectedAudioDevice);
+                    
+                    if (targetDevice != null && targetDevice != _audioCaptureService.CurrentDevice)
+                    {
+                        _logger.LogInformation("Switching to selected audio device: {DeviceName}", targetDevice.FriendlyName);
+                        await _audioCaptureService.SwitchDeviceAsync(targetDevice);
+                    }
+                }
+
+                _logger.LogInformation("Audio capture settings updated successfully");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to update audio capture settings");
+            }
+        }
+
+        /// <summary>
+        /// Updates the frequency analyzer configuration with new settings.
+        /// </summary>
+        /// <param name="settings">The updated application settings.</param>
+        private async Task UpdateFrequencyAnalyzerAsync(ApplicationSettings settings)
+        {
+            try
+            {
+                _logger.LogInformation("Updating frequency analyzer configuration");
+                
+                // Reconfigure the frequency analyzer with new settings
+                await _frequencyAnalyzer.ConfigureAsync(
+                    fftSize: 2048,
+                    sampleRate: 44100,
+                    frequencyBands: settings.FrequencyBands,
+                    smoothingFactor: settings.SmoothingFactor,
+                    cancellationToken: default);
+
+                _logger.LogInformation("Frequency analyzer updated successfully");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to update frequency analyzer configuration");
+            }
+        }
+
+        /// <summary>
+        /// Updates the TaskbarOverlayManager with new visualization settings.
+        /// </summary>
+        /// <param name="settings">The updated application settings.</param>
+        private async Task UpdateTaskbarOverlaySettingsAsync(ApplicationSettings settings)
+        {
+            try
+            {
+                _logger.LogInformation("Updating TaskbarOverlayManager with new settings");
+                
+                // Update the taskbar overlay manager with the new settings
+                await _taskbarOverlayManager.UpdateSettingsAsync(settings);
+                
+                _logger.LogInformation("TaskbarOverlayManager updated successfully with new settings");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to update TaskbarOverlayManager with new settings");
+            }
+        }
+
+        /// <summary>
+        /// Updates the spectrum window with new visualization settings.
+        /// </summary>
+        /// <param name="settings">The updated application settings.</param>
+        private async Task UpdateSpectrumWindowSettings(ApplicationSettings settings)
+        {
+            try
+            {
+                if (_spectrumWindow == null)
+                {
+                    _logger.LogDebug("Spectrum window not available, skipping settings update");
+                    return;
+                }
+
+                _logger.LogInformation("Updating spectrum window with new settings");
+                
+                // Call UpdateSettings method on the spectrum window using reflection
+                var spectrumWindowType = _spectrumWindow.GetType();
+                var updateMethod = spectrumWindowType.GetMethod("UpdateSettings");
+                
+                if (updateMethod != null)
+                {
+                    // Check if we need to invoke on UI thread
+                    if (_spectrumWindow is System.Windows.Forms.Control control && control.InvokeRequired)
+                    {
+                        await Task.Run(() =>
+                        {
+                            control.Invoke(new Action(() => updateMethod.Invoke(_spectrumWindow, new object[] { settings })));
+                        });
+                    }
+                    else
+                    {
+                        updateMethod.Invoke(_spectrumWindow, new object[] { settings });
+                    }
+                    
+                    _logger.LogInformation("Spectrum window updated successfully with new settings");
+                }
+                else
+                {
+                    _logger.LogWarning("UpdateSettings method not found on spectrum window");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to update spectrum window with new settings");
             }
         }
 

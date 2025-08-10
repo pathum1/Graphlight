@@ -157,6 +157,253 @@ namespace TaskbarEqualizer.SystemTray
             }
         }
 
+        public async Task UpdateSettingsAsync(object settings, CancellationToken cancellationToken = default)
+        {
+            if (_disposed)
+                throw new ObjectDisposedException(nameof(TaskbarOverlayManager));
+
+            if (settings == null)
+            {
+                _logger.LogWarning("UpdateSettingsAsync called with null settings");
+                return;
+            }
+
+            try
+            {
+                _logger.LogInformation("Updating TaskbarOverlayManager settings");
+
+                // Use reflection to access ApplicationSettings properties
+                var settingsType = settings.GetType();
+
+                // Update overlay configuration properties
+                var overlayConfig = new OverlayConfiguration
+                {
+                    Enabled = _configuration.Enabled,
+                    Position = _configuration.Position,
+                    Width = _configuration.Width,
+                    Height = _configuration.Height,
+                    Margin = _configuration.Margin,
+                    AutoHide = _configuration.AutoHide,
+                    AutoHideDelay = _configuration.AutoHideDelay,
+                    RenderConfiguration = new RenderConfiguration()
+                };
+
+                // Update UpdateFrequency from UpdateInterval setting
+                var updateIntervalProp = settingsType.GetProperty("UpdateInterval");
+                if (updateIntervalProp?.GetValue(settings) is double updateInterval && updateInterval > 0)
+                {
+                    overlayConfig.UpdateFrequency = Math.Max(15, (int)(1000.0 / updateInterval));
+                    _logger.LogDebug("Updated overlay frequency to {Frequency}Hz from {Interval}ms interval", 
+                        overlayConfig.UpdateFrequency, updateInterval);
+                }
+
+                // Update Opacity
+                var opacityProp = settingsType.GetProperty("Opacity");
+                if (opacityProp?.GetValue(settings) is float opacity)
+                {
+                    overlayConfig.Opacity = opacity;
+                    _logger.LogDebug("Updated overlay opacity to {Opacity}", opacity);
+                }
+
+                // Update RenderConfiguration with visualization settings
+                var renderConfig = overlayConfig.RenderConfiguration;
+
+                // IconSize
+                var iconSizeProp = settingsType.GetProperty("IconSize");
+                if (iconSizeProp?.GetValue(settings) is object iconSize)
+                {
+                    if (Enum.TryParse<IconSize>(iconSize.ToString(), out var parsedSize))
+                    {
+                        renderConfig.IconSize = parsedSize;
+                        _logger.LogDebug("Updated icon size to {Size}", parsedSize);
+                    }
+                }
+
+                // VisualizationStyle
+                var styleProp = settingsType.GetProperty("VisualizationStyle");
+                if (styleProp?.GetValue(settings) is object style)
+                {
+                    if (Enum.TryParse<EqualizerStyle>(style.ToString(), out var parsedStyle))
+                    {
+                        renderConfig.Style = parsedStyle;
+                        _logger.LogDebug("Updated visualization style to {Style}", parsedStyle);
+                    }
+                }
+
+                // RenderQuality
+                var qualityProp = settingsType.GetProperty("RenderQuality");
+                if (qualityProp?.GetValue(settings) is object quality)
+                {
+                    if (Enum.TryParse<RenderQuality>(quality.ToString(), out var parsedQuality))
+                    {
+                        renderConfig.Quality = parsedQuality;
+                        _logger.LogDebug("Updated render quality to {Quality}", parsedQuality);
+                    }
+                }
+
+                // MaxFrameRate
+                var maxFrameRateProp = settingsType.GetProperty("MaxFrameRate");
+                if (maxFrameRateProp?.GetValue(settings) is int maxFrameRate && maxFrameRate > 0)
+                {
+                    renderConfig.TargetFrameRate = maxFrameRate;
+                    _logger.LogDebug("Updated target frame rate to {FrameRate}", maxFrameRate);
+                }
+
+                // EnableAnimations
+                var enableAnimationsProp = settingsType.GetProperty("EnableAnimations");
+                if (enableAnimationsProp?.GetValue(settings) is bool enableAnimations)
+                {
+                    // Animation is controlled by the animation configuration
+                    if (renderConfig.Animation == null)
+                        renderConfig.Animation = new AnimationConfiguration();
+                    
+                    _logger.LogDebug("Animations enabled: {Enabled}", enableAnimations);
+                }
+
+                // EnableEffects
+                var enableEffectsProp = settingsType.GetProperty("EnableEffects");
+                if (enableEffectsProp?.GetValue(settings) is bool enableEffects)
+                {
+                    renderConfig.EnableEffects = enableEffects;
+                    _logger.LogDebug("Updated effects enabled to {Enabled}", enableEffects);
+                }
+
+                // AntiAliasing (defaults to enabled)
+                renderConfig.AntiAliasing = true;
+
+                // AdaptiveQuality
+                var adaptiveQualityProp = settingsType.GetProperty("AdaptiveQuality");
+                if (adaptiveQualityProp?.GetValue(settings) is bool adaptiveQuality)
+                {
+                    renderConfig.AdaptiveQuality = adaptiveQuality;
+                    _logger.LogDebug("Updated adaptive quality to {Enabled}", adaptiveQuality);
+                }
+
+                // ChangeThreshold
+                var changeThresholdProp = settingsType.GetProperty("ChangeThreshold");
+                if (changeThresholdProp?.GetValue(settings) is double changeThreshold)
+                {
+                    renderConfig.ChangeThreshold = changeThreshold;
+                    _logger.LogDebug("Updated change threshold to {Threshold}", changeThreshold);
+                }
+
+                // Update color scheme
+                if (renderConfig.ColorScheme == null)
+                    renderConfig.ColorScheme = new ColorScheme();
+
+                var colorScheme = renderConfig.ColorScheme;
+
+                // UseCustomColors and custom colors
+                var useCustomColorsProp = settingsType.GetProperty("UseCustomColors");
+                var useCustomColors = useCustomColorsProp?.GetValue(settings) is bool customColors && customColors;
+
+                if (useCustomColors)
+                {
+                    var primaryColorProp = settingsType.GetProperty("CustomPrimaryColor");
+                    if (primaryColorProp?.GetValue(settings) is System.Drawing.Color primaryColor)
+                    {
+                        colorScheme.PrimaryColor = primaryColor;
+                        _logger.LogDebug("Updated primary color to {Color}", primaryColor);
+                    }
+
+                    var secondaryColorProp = settingsType.GetProperty("CustomSecondaryColor");
+                    if (secondaryColorProp?.GetValue(settings) is System.Drawing.Color secondaryColor)
+                    {
+                        colorScheme.SecondaryColor = secondaryColor;
+                        _logger.LogDebug("Updated secondary color to {Color}", secondaryColor);
+                    }
+                }
+
+                // EnableGradient
+                var enableGradientProp = settingsType.GetProperty("EnableGradient");
+                if (enableGradientProp?.GetValue(settings) is bool enableGradient)
+                {
+                    colorScheme.UseGradient = enableGradient;
+                    _logger.LogDebug("Updated gradient enabled to {Enabled}", enableGradient);
+                }
+
+                // GradientDirection
+                var gradientDirectionProp = settingsType.GetProperty("GradientDirection");
+                if (gradientDirectionProp?.GetValue(settings) is object gradientDirection)
+                {
+                    if (Enum.TryParse<GradientDirection>(gradientDirection.ToString(), out var parsedDirection))
+                    {
+                        colorScheme.GradientDirection = parsedDirection;
+                        _logger.LogDebug("Updated gradient direction to {Direction}", parsedDirection);
+                    }
+                }
+
+                // Update animation configuration
+                if (renderConfig.Animation == null)
+                    renderConfig.Animation = new AnimationConfiguration();
+
+                var animConfig = renderConfig.Animation;
+
+                // SmoothingFactor
+                var smoothingFactorProp = settingsType.GetProperty("SmoothingFactor");
+                if (smoothingFactorProp?.GetValue(settings) is double smoothingFactor)
+                {
+                    animConfig.SmoothingFactor = smoothingFactor;
+                    _logger.LogDebug("Updated smoothing factor to {Factor}", smoothingFactor);
+                }
+
+                // AnimationSpeed
+                var animSpeedProp = settingsType.GetProperty("AnimationSpeed");
+                if (animSpeedProp?.GetValue(settings) is double animSpeed)
+                {
+                    // Convert animation speed to attack/decay times
+                    var baseAttackTime = 10.0;
+                    var baseDecayTime = 100.0;
+                    animConfig.AttackTime = baseAttackTime / animSpeed;
+                    animConfig.DecayTime = baseDecayTime / animSpeed;
+                    _logger.LogDebug("Updated animation speed to {Speed} (attack={Attack}ms, decay={Decay}ms)", 
+                        animSpeed, animConfig.AttackTime, animConfig.DecayTime);
+                }
+
+                // EnableBeatDetection
+                var beatDetectionProp = settingsType.GetProperty("EnableBeatDetection");
+                if (beatDetectionProp?.GetValue(settings) is bool enableBeatDetection)
+                {
+                    animConfig.EnableBeatEffects = enableBeatDetection;
+                    _logger.LogDebug("Updated beat detection to {Enabled}", enableBeatDetection);
+                }
+
+                // EnableSpringPhysics
+                var springPhysicsProp = settingsType.GetProperty("EnableSpringPhysics");
+                if (springPhysicsProp?.GetValue(settings) is bool enableSpringPhysics)
+                {
+                    animConfig.EnableSpringPhysics = enableSpringPhysics;
+                    _logger.LogDebug("Updated spring physics to {Enabled}", enableSpringPhysics);
+                }
+
+                // SpringStiffness
+                var springStiffnessProp = settingsType.GetProperty("SpringStiffness");
+                if (springStiffnessProp?.GetValue(settings) is float springStiffness)
+                {
+                    animConfig.SpringStiffness = springStiffness;
+                    _logger.LogDebug("Updated spring stiffness to {Stiffness}", springStiffness);
+                }
+
+                // SpringDamping
+                var springDampingProp = settingsType.GetProperty("SpringDamping");
+                if (springDampingProp?.GetValue(settings) is float springDamping)
+                {
+                    animConfig.SpringDamping = springDamping;
+                    _logger.LogDebug("Updated spring damping to {Damping}", springDamping);
+                }
+
+                // Apply the updated configuration
+                await UpdateConfigurationAsync(overlayConfig, cancellationToken);
+
+                _logger.LogInformation("TaskbarOverlayManager settings updated successfully");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to update TaskbarOverlayManager settings");
+                throw;
+            }
+        }
+
         private async Task CreateOverlayWindowAsync()
         {
             if (_overlayWindow != null)

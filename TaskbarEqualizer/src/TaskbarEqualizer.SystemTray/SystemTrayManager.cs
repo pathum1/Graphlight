@@ -22,6 +22,7 @@ namespace TaskbarEqualizer.SystemTray
         private NotifyIcon? _notifyIcon;
         private Icon? _currentIcon;
         private string _toolTipText = string.Empty;
+        private SynchronizationContext? _uiCtx;
         
         private bool _isVisible;
         private bool _isInitialized;
@@ -75,7 +76,7 @@ namespace TaskbarEqualizer.SystemTray
         #region Public Methods
 
         /// <inheritdoc />
-        public async Task InitializeAsync(Icon initialIcon, string toolTipText, CancellationToken cancellationToken = default)
+        public Task InitializeAsync(Icon initialIcon, string toolTipText, CancellationToken cancellationToken = default)
         {
             if (_disposed)
                 throw new ObjectDisposedException(nameof(SystemTrayManager));
@@ -83,67 +84,31 @@ namespace TaskbarEqualizer.SystemTray
             if (_isInitialized)
             {
                 _logger.LogWarning("SystemTrayManager is already initialized");
-                return;
+                return Task.CompletedTask;
             }
 
             if (initialIcon == null)
                 throw new ArgumentNullException(nameof(initialIcon));
 
             _logger.LogInformation("Initializing system tray manager with tooltip: {ToolTip}", toolTipText);
+            _logger.LogInformation("🔧 DIAGNOSTIC: Current thread apartment state: {ApartmentState}", Thread.CurrentThread.GetApartmentState());
+            _logger.LogInformation("🔧 DIAGNOSTIC: Current synchronization context: {SyncContext}", SynchronizationContext.Current?.GetType().Name ?? "null");
 
             try
             {
-                // Check if we're already on the UI thread
-                if (SynchronizationContext.Current != null && SynchronizationContext.Current is WindowsFormsSynchronizationContext)
+                // Capture UI synchronization context (called from WinForms Timer)
+                _uiCtx = SynchronizationContext.Current;
+                _logger.LogInformation("🔧 DIAGNOSTIC: Captured UI SynchronizationContext: {ContextType}", _uiCtx?.GetType().Name ?? "null");
+                
+                // Create NotifyIcon directly on UI thread
+                lock (_trayLock)
                 {
-                    // We're on the UI thread, create directly
-                    lock (_trayLock)
-                    {
-                        CreateNotifyIcon(initialIcon, toolTipText);
-                        _isInitialized = true;
-                    }
+                    CreateNotifyIcon(initialIcon, toolTipText);
+                    _isInitialized = true;
                 }
-                else
-                {
-                    // We need to marshal to the UI thread
-                    // Use TaskScheduler.FromCurrentSynchronizationContext() to properly marshal
-                    var tcs = new TaskCompletionSource<bool>();
-                    
-                    WindowsFormsSynchronizationContext.Current?.Post(_ =>
-                    {
-                        try
-                        {
-                            lock (_trayLock)
-                            {
-                                CreateNotifyIcon(initialIcon, toolTipText);
-                                _isInitialized = true;
-                            }
-                            tcs.SetResult(true);
-                        }
-                        catch (Exception ex)
-                        {
-                            tcs.SetException(ex);
-                        }
-                    }, null);
-                    
-                    // If no WindowsFormsSynchronizationContext, fall back to Control.Invoke pattern
-                    if (WindowsFormsSynchronizationContext.Current == null)
-                    {
-                        await Task.Run(() =>
-                        {
-                            lock (_trayLock)
-                            {
-                                CreateNotifyIcon(initialIcon, toolTipText);
-                                _isInitialized = true;
-                            }
-                        }, cancellationToken);
-                        tcs.SetResult(true);
-                    }
-                    
-                    await tcs.Task;
-                }
-
+                
                 _logger.LogDebug("SystemTrayManager initialized successfully");
+                return Task.CompletedTask;
             }
             catch (Exception ex)
             {
@@ -153,7 +118,7 @@ namespace TaskbarEqualizer.SystemTray
         }
 
         /// <inheritdoc />
-        public async Task ShowAsync(CancellationToken cancellationToken = default)
+        public Task ShowAsync(CancellationToken cancellationToken = default)
         {
             if (_disposed)
                 throw new ObjectDisposedException(nameof(SystemTrayManager));
@@ -164,27 +129,34 @@ namespace TaskbarEqualizer.SystemTray
             if (_isVisible)
             {
                 _logger.LogDebug("Tray icon is already visible");
-                return;
+                return Task.CompletedTask;
             }
 
             _logger.LogDebug("Showing tray icon");
 
             try
             {
-                await Task.Run(() =>
+                OnUi(() =>
                 {
                     lock (_trayLock)
                     {
                         if (_notifyIcon != null)
                         {
+                            _logger.LogInformation("🔧 DIAGNOSTIC: Setting NotifyIcon.Visible = true");
                             _notifyIcon.Visible = true;
                             _isVisible = true;
                             OnPropertyChanged(nameof(IsVisible));
+                            _logger.LogInformation("🔧 DIAGNOSTIC: NotifyIcon is now visible, ready for mouse events");
+                        }
+                        else
+                        {
+                            _logger.LogError("🔧 DIAGNOSTIC: Cannot show tray icon - NotifyIcon is null!");
                         }
                     }
-                }, cancellationToken);
+                });
 
                 _logger.LogDebug("Tray icon shown successfully");
+                return Task.CompletedTask;
             }
             catch (Exception ex)
             {
@@ -194,7 +166,7 @@ namespace TaskbarEqualizer.SystemTray
         }
 
         /// <inheritdoc />
-        public async Task HideAsync(CancellationToken cancellationToken = default)
+        public Task HideAsync(CancellationToken cancellationToken = default)
         {
             if (_disposed)
                 throw new ObjectDisposedException(nameof(SystemTrayManager));
@@ -202,14 +174,14 @@ namespace TaskbarEqualizer.SystemTray
             if (!_isVisible)
             {
                 _logger.LogDebug("Tray icon is already hidden");
-                return;
+                return Task.CompletedTask;
             }
 
             _logger.LogDebug("Hiding tray icon");
 
             try
             {
-                await Task.Run(() =>
+                OnUi(() =>
                 {
                     lock (_trayLock)
                     {
@@ -220,9 +192,10 @@ namespace TaskbarEqualizer.SystemTray
                             OnPropertyChanged(nameof(IsVisible));
                         }
                     }
-                }, cancellationToken);
+                });
 
                 _logger.LogDebug("Tray icon hidden successfully");
+                return Task.CompletedTask;
             }
             catch (Exception ex)
             {
@@ -232,7 +205,7 @@ namespace TaskbarEqualizer.SystemTray
         }
 
         /// <inheritdoc />
-        public async Task UpdateIconAsync(Icon newIcon, CancellationToken cancellationToken = default)
+        public Task UpdateIconAsync(Icon newIcon, CancellationToken cancellationToken = default)
         {
             if (_disposed)
                 throw new ObjectDisposedException(nameof(SystemTrayManager));
@@ -242,7 +215,8 @@ namespace TaskbarEqualizer.SystemTray
 
             try
             {
-                await Task.Run(() => UpdateIconInternal(newIcon), cancellationToken);
+                OnUi(() => UpdateIconInternal(newIcon));
+                return Task.CompletedTask;
             }
             catch (Exception ex)
             {
@@ -262,7 +236,7 @@ namespace TaskbarEqualizer.SystemTray
 
             try
             {
-                UpdateIconInternal(newIcon);
+                OnUi(() => UpdateIconInternal(newIcon));
             }
             catch (Exception ex)
             {
@@ -272,7 +246,7 @@ namespace TaskbarEqualizer.SystemTray
         }
 
         /// <inheritdoc />
-        public async Task UpdateToolTipAsync(string text, CancellationToken cancellationToken = default)
+        public Task UpdateToolTipAsync(string text, CancellationToken cancellationToken = default)
         {
             if (_disposed)
                 throw new ObjectDisposedException(nameof(SystemTrayManager));
@@ -281,13 +255,13 @@ namespace TaskbarEqualizer.SystemTray
                 text = string.Empty;
 
             if (_toolTipText == text)
-                return;
+                return Task.CompletedTask;
 
             _logger.LogDebug("Updating tooltip to: {ToolTip}", text);
 
             try
             {
-                await Task.Run(() =>
+                OnUi(() =>
                 {
                     lock (_trayLock)
                     {
@@ -300,9 +274,10 @@ namespace TaskbarEqualizer.SystemTray
                             OnPropertyChanged(nameof(ToolTipText));
                         }
                     }
-                }, cancellationToken);
+                });
 
                 _logger.LogDebug("Tooltip updated successfully");
+                return Task.CompletedTask;
             }
             catch (Exception ex)
             {
@@ -312,7 +287,7 @@ namespace TaskbarEqualizer.SystemTray
         }
 
         /// <inheritdoc />
-        public async Task ShowBalloonTipAsync(string title, string text, BalloonTipIcon icon = BalloonTipIcon.Info, 
+        public Task ShowBalloonTipAsync(string title, string text, BalloonTipIcon icon = BalloonTipIcon.Info, 
             int timeout = 3000, CancellationToken cancellationToken = default)
         {
             if (_disposed)
@@ -321,17 +296,17 @@ namespace TaskbarEqualizer.SystemTray
             if (!_isInitialized || !_isVisible)
             {
                 _logger.LogWarning("Cannot show balloon tip - tray icon not initialized or visible");
-                return;
+                return Task.CompletedTask;
             }
 
             if (string.IsNullOrEmpty(title) && string.IsNullOrEmpty(text))
-                return;
+                return Task.CompletedTask;
 
             _logger.LogDebug("Showing balloon tip: {Title} - {Text}", title, text);
 
             try
             {
-                await Task.Run(() =>
+                OnUi(() =>
                 {
                     lock (_trayLock)
                     {
@@ -348,9 +323,10 @@ namespace TaskbarEqualizer.SystemTray
                             _notifyIcon.ShowBalloonTip(timeout, title ?? string.Empty, text ?? string.Empty, toolTipIcon);
                         }
                     }
-                }, cancellationToken);
+                });
 
                 _logger.LogDebug("Balloon tip shown successfully");
+                return Task.CompletedTask;
             }
             catch (Exception ex)
             {
@@ -377,6 +353,28 @@ namespace TaskbarEqualizer.SystemTray
                 // Context menu handling is done in the event handlers
                 // The enabled state is checked there
             }
+        }
+
+        /// <summary>
+        /// Sets the context menu strip for the tray icon.
+        /// </summary>
+        /// <param name="contextMenuStrip">Context menu strip to assign.</param>
+        public void SetContextMenuStrip(ContextMenuStrip contextMenuStrip)
+        {
+            if (_disposed)
+                throw new ObjectDisposedException(nameof(SystemTrayManager));
+
+            OnUi(() =>
+            {
+                lock (_trayLock)
+                {
+                    if (_notifyIcon != null)
+                    {
+                        _notifyIcon.ContextMenuStrip = contextMenuStrip;
+                        _logger.LogDebug("Context menu strip assigned to notify icon");
+                    }
+                }
+            });
         }
 
         /// <inheritdoc />
@@ -416,19 +414,19 @@ namespace TaskbarEqualizer.SystemTray
         }
 
         /// <inheritdoc />
-        public async Task RefreshAsync(CancellationToken cancellationToken = default)
+        public Task RefreshAsync(CancellationToken cancellationToken = default)
         {
             if (_disposed)
                 throw new ObjectDisposedException(nameof(SystemTrayManager));
 
             if (!_isInitialized)
-                return;
+                return Task.CompletedTask;
 
             _logger.LogDebug("Refreshing tray icon");
 
             try
             {
-                await Task.Run(() =>
+                OnUi(() =>
                 {
                     lock (_trayLock)
                     {
@@ -440,9 +438,10 @@ namespace TaskbarEqualizer.SystemTray
                             _notifyIcon.Visible = true;
                         }
                     }
-                }, cancellationToken);
+                });
 
                 _logger.LogDebug("Tray icon refreshed successfully");
+                return Task.CompletedTask;
             }
             catch (Exception ex)
             {
@@ -455,8 +454,25 @@ namespace TaskbarEqualizer.SystemTray
 
         #region Private Methods
 
+        /// <summary>
+        /// Marshals an action to the UI thread using the captured synchronization context.
+        /// </summary>
+        private void OnUi(Action action)
+        {
+            if (_uiCtx == null || SynchronizationContext.Current == _uiCtx)
+            {
+                action();
+            }
+            else
+            {
+                _uiCtx.Send(_ => action(), null);
+            }
+        }
+
         private void CreateNotifyIcon(Icon initialIcon, string toolTipText)
         {
+            _logger.LogInformation("🔧 DIAGNOSTIC: Creating NotifyIcon with tooltip: {ToolTip}", toolTipText);
+            
             _notifyIcon = new NotifyIcon
             {
                 Icon = initialIcon,
@@ -464,15 +480,34 @@ namespace TaskbarEqualizer.SystemTray
                 Visible = false
             };
 
+            _logger.LogInformation("🔧 DIAGNOSTIC: NotifyIcon created - Handle: {Handle}", _notifyIcon.GetType().Name);
+
             // Store references
             _currentIcon = initialIcon;
             _toolTipText = toolTipText;
 
             // Wire up event handlers
-            _notifyIcon.MouseClick += OnNotifyIconMouseClick;
+            _logger.LogInformation("🔧 DIAGNOSTIC: Wiring up NotifyIcon event handlers...");
+            
+            // Try MouseClick first to see if ANY mouse events work
+            _notifyIcon.MouseClick += OnNotifyIconMouseClick_MainHandler;
+            _logger.LogInformation("🔧 DIAGNOSTIC: MouseClick main handler registered");
+            
+            // Keep MouseUp as backup
+            _notifyIcon.MouseUp += OnNotifyIconMouseUp;
+            _logger.LogInformation("🔧 DIAGNOSTIC: MouseUp event handler registered");
+            
             _notifyIcon.MouseDoubleClick += OnNotifyIconMouseDoubleClick;
+            _logger.LogInformation("🔧 DIAGNOSTIC: MouseDoubleClick event handler registered");
+            
             _notifyIcon.BalloonTipClicked += OnBalloonTipClicked;
             _notifyIcon.BalloonTipClosed += OnBalloonTipClosed;
+            
+            _logger.LogInformation("🔧 DIAGNOSTIC: All NotifyIcon event handlers registered successfully");
+
+            // Also try MouseDown for even more comprehensive testing
+            _notifyIcon.MouseDown += OnNotifyIconMouseDown_Diagnostic;
+            _logger.LogInformation("🔧 DIAGNOSTIC: MouseDown diagnostic handler also registered");
         }
 
         private void UpdateIconInternal(Icon newIcon)
@@ -488,8 +523,11 @@ namespace TaskbarEqualizer.SystemTray
             }
         }
 
-        private void OnNotifyIconMouseClick(object? sender, MouseEventArgs e)
+        private void OnNotifyIconMouseClick_MainHandler(object? sender, MouseEventArgs e)
         {
+            _logger.LogInformation("🖱️ DIAGNOSTIC: MouseClick MAIN event fired - Button: {Button}, Location: ({X}, {Y})", 
+                e.Button, e.X, e.Y);
+                
             try
             {
                 var button = e.Button switch
@@ -500,20 +538,86 @@ namespace TaskbarEqualizer.SystemTray
                     _ => TrayMouseButton.Left
                 };
 
-                var args = new TrayIconClickedEventArgs(button, 1, new Point(e.X, e.Y));
+                _logger.LogInformation("🖱️ DIAGNOSTIC: MouseClick mapped to: {MappedButton}", button);
 
-                // Handle right-click for context menu
+                // fire context menu on right button click
                 if (button == TrayMouseButton.Right && _contextMenuEnabled)
                 {
-                    var menuArgs = new ContextMenuRequestedEventArgs(Cursor.Position);
+                    var cursorPos = Cursor.Position;
+                    _logger.LogInformation("🖱️ DIAGNOSTIC: Right button detected in MouseClick - firing ContextMenuRequested at {Position}", cursorPos);
+                    
+                    var menuArgs = new ContextMenuRequestedEventArgs(cursorPos);
+                    _logger.LogInformation("🖱️ DIAGNOSTIC: MouseClick ContextMenuRequested event has {SubscriberCount} subscribers", 
+                        ContextMenuRequested?.GetInvocationList()?.Length ?? 0);
+                    
                     ContextMenuRequested?.Invoke(this, menuArgs);
+                    _logger.LogInformation("🖱️ DIAGNOSTIC: MouseClick ContextMenuRequested event fired successfully");
+                }
+                else
+                {
+                    _logger.LogInformation("🖱️ DIAGNOSTIC: MouseClick not showing context menu - Button: {Button}, ContextMenuEnabled: {Enabled}", 
+                        button, _contextMenuEnabled);
                 }
 
-                TrayIconClicked?.Invoke(this, args);
+                // still fire the click event
+                TrayIconClicked?.Invoke(this, new TrayIconClickedEventArgs(button, 1, new Point(e.X, e.Y)));
+                _logger.LogDebug("🖱️ DIAGNOSTIC: MouseClick TrayIconClicked event fired for button: {Button}", button);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error handling tray icon click");
+                _logger.LogError(ex, "🖱️ DIAGNOSTIC: Error handling tray icon mouse click");
+            }
+        }
+
+        private void OnNotifyIconMouseDown_Diagnostic(object? sender, MouseEventArgs e)
+        {
+            _logger.LogInformation("🖱️ DIAGNOSTIC: MouseDown event fired - Button: {Button}, Location: ({X}, {Y})", 
+                e.Button, e.X, e.Y);
+        }
+
+        private void OnNotifyIconMouseUp(object? sender, MouseEventArgs e)
+        {
+            try
+            {
+                _logger.LogInformation("🖱️ DIAGNOSTIC: NotifyIcon MouseUp fired - Button: {Button}, Location: ({X}, {Y}), ContextMenuEnabled: {Enabled}", 
+                    e.Button, e.X, e.Y, _contextMenuEnabled);
+
+                var button = e.Button switch
+                {
+                    MouseButtons.Left => TrayMouseButton.Left,
+                    MouseButtons.Right => TrayMouseButton.Right,
+                    MouseButtons.Middle => TrayMouseButton.Middle,
+                    _ => TrayMouseButton.Left
+                };
+
+                _logger.LogInformation("🖱️ DIAGNOSTIC: Mapped button to: {MappedButton}", button);
+
+                // fire context menu only on right button release
+                if (button == TrayMouseButton.Right && _contextMenuEnabled)
+                {
+                    var cursorPos = Cursor.Position;
+                    _logger.LogInformation("🖱️ DIAGNOSTIC: Right button detected - firing ContextMenuRequested at {Position}", cursorPos);
+                    
+                    var menuArgs = new ContextMenuRequestedEventArgs(cursorPos);
+                    _logger.LogInformation("🖱️ DIAGNOSTIC: ContextMenuRequested event has {SubscriberCount} subscribers", 
+                        ContextMenuRequested?.GetInvocationList()?.Length ?? 0);
+                    
+                    ContextMenuRequested?.Invoke(this, menuArgs);
+                    _logger.LogInformation("🖱️ DIAGNOSTIC: ContextMenuRequested event fired successfully");
+                }
+                else
+                {
+                    _logger.LogInformation("🖱️ DIAGNOSTIC: Not showing context menu - Button: {Button}, ContextMenuEnabled: {Enabled}", 
+                        button, _contextMenuEnabled);
+                }
+
+                // still fire the click event
+                TrayIconClicked?.Invoke(this, new TrayIconClickedEventArgs(button, 1, new Point(e.X, e.Y)));
+                _logger.LogDebug("🖱️ DIAGNOSTIC: TrayIconClicked event fired for button: {Button}", button);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "🖱️ DIAGNOSTIC: Error handling tray icon mouse up");
             }
         }
 

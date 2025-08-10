@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -58,6 +59,11 @@ namespace TaskbarEqualizer.SystemTray.ContextMenu
         /// <inheritdoc />
         public IReadOnlyList<IContextMenuItem> MenuItems => _menuItems.AsReadOnly();
 
+        /// <summary>
+        /// Gets the underlying ContextMenuStrip for direct assignment to controls.
+        /// </summary>
+        public ContextMenuStrip? ContextMenuStrip => _contextMenu;
+
         #endregion
 
         #region Public Methods
@@ -97,43 +103,99 @@ namespace TaskbarEqualizer.SystemTray.ContextMenu
         }
 
         /// <inheritdoc />
+        public Task ShowMenuAsync(object location)
+        {
+            if (location is Point point)
+            {
+                return ShowMenuAsync(point);
+            }
+            throw new ArgumentException("Location must be a Point", nameof(location));
+        }
+
+        /// <inheritdoc />
         public Task ShowMenuAsync(Point location, CancellationToken cancellationToken = default)
         {
+            _logger.LogInformation("🎯 DIAGNOSTIC: ShowMenuAsync called at location {Location}", location);
+
             if (_disposed)
+            {
+                _logger.LogError("🎯 DIAGNOSTIC: ShowMenuAsync called on disposed ContextMenuManager!");
                 throw new ObjectDisposedException(nameof(ContextMenuManager));
+            }
 
             if (!_isInitialized)
+            {
+                _logger.LogError("🎯 DIAGNOSTIC: ShowMenuAsync called on uninitialized ContextMenuManager!");
                 throw new InvalidOperationException("ContextMenuManager must be initialized before showing menu");
+            }
+
+            _logger.LogInformation("🎯 DIAGNOSTIC: ContextMenu state - Disposed: {Disposed}, Initialized: {Initialized}, ContextMenu null: {IsNull}", 
+                _disposed, _isInitialized, _contextMenu == null);
 
             try
             {
                 // Fire showing event
                 var showingArgs = new MenuShowingEventArgs(location);
+                _logger.LogInformation("🎯 DIAGNOSTIC: Firing MenuShowing event with {SubscriberCount} subscribers", 
+                    MenuShowing?.GetInvocationList()?.Length ?? 0);
                 MenuShowing?.Invoke(this, showingArgs);
 
                 if (showingArgs.Cancel)
                 {
-                    _logger.LogDebug("Menu show cancelled by event handler");
+                    _logger.LogWarning("🎯 DIAGNOSTIC: Menu show cancelled by event handler");
                     return Task.CompletedTask;
                 }
 
-                lock (_menuLock)
+                // Ensure we're on the UI thread for showing the context menu
+                if (_contextMenu?.InvokeRequired == true)
                 {
-                    if (_contextMenu != null)
-                    {
-                        _contextMenu.Show(location);
-                        _isVisible = true;
-                        _logger.LogDebug("Context menu shown at {Location}", location);
-                    }
+                    _logger.LogInformation("🎯 DIAGNOSTIC: Context menu InvokeRequired=true, marshalling to UI thread");
+                    _contextMenu.Invoke(new Action(() => ShowMenuInternal(location)));
                 }
+                else
+                {
+                    _logger.LogInformation("🎯 DIAGNOSTIC: Context menu InvokeRequired=false, calling ShowMenuInternal directly");
+                    ShowMenuInternal(location);
+                }
+
+                _logger.LogInformation("🎯 DIAGNOSTIC: ShowMenuAsync completed successfully");
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to show context menu");
+                _logger.LogError(ex, "🎯 DIAGNOSTIC: Failed to show context menu at {Location}", location);
                 throw;
             }
 
             return Task.CompletedTask;
+        }
+
+        private void ShowMenuInternal(Point location)
+        {
+            _logger.LogInformation("🎯 DIAGNOSTIC: ShowMenuInternal called at {Location}", location);
+            
+            lock (_menuLock)
+            {
+                if (_contextMenu != null)
+                {
+                    _logger.LogInformation("🎯 DIAGNOSTIC: ContextMenuStrip found, menu items count: {ItemCount}", _contextMenu.Items.Count);
+                    
+                    try
+                    {
+                        _contextMenu.Show(location);
+                        _isVisible = true;
+                        _logger.LogInformation("🎯 DIAGNOSTIC: ContextMenuStrip.Show() called successfully at {Location}, IsVisible set to true", location);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "🎯 DIAGNOSTIC: Exception in ContextMenuStrip.Show() at {Location}", location);
+                        throw;
+                    }
+                }
+                else
+                {
+                    _logger.LogError("🎯 DIAGNOSTIC: ContextMenuStrip is NULL in ShowMenuInternal!");
+                }
+            }
         }
 
         /// <inheritdoc />
@@ -463,6 +525,13 @@ namespace TaskbarEqualizer.SystemTray.ContextMenu
         private void SetupDefaultMenuItems()
         {
             // Add default menu items
+            var autoStartItem = ContextMenuItem.CreateCheckbox(
+                "autostart",
+                "Start with Windows",
+                false, // Initial state - will be updated by orchestrator
+                item => OnAutoStartToggled(item)
+            );
+
             var settingsItem = ContextMenuItem.CreateWithIcon(
                 "settings", 
                 "Settings...", 
@@ -470,7 +539,13 @@ namespace TaskbarEqualizer.SystemTray.ContextMenu
                 item => OnSettingsClicked(item)
             ).WithShortcut(Keys.Control | Keys.S);
 
-            var separatorItem = ContextMenuItem.CreateSeparator("separator1");
+            var spectrumItem = ContextMenuItem.CreateStandard(
+                "spectrum",
+                "Show Spectrum Analyzer",
+                item => OnSpectrumClicked(item)
+            );
+
+            var separatorItem1 = ContextMenuItem.CreateSeparator("separator1");
 
             var aboutItem = ContextMenuItem.CreateStandard(
                 "about", 
@@ -478,13 +553,15 @@ namespace TaskbarEqualizer.SystemTray.ContextMenu
                 item => OnAboutClicked(item)
             );
 
+            var separatorItem2 = ContextMenuItem.CreateSeparator("separator2");
+
             var exitItem = ContextMenuItem.CreateStandard(
                 "exit", 
                 "Exit", 
                 item => OnExitClicked(item)
             ).WithShortcut(Keys.Alt | Keys.F4);
 
-            _menuItems.AddRange(new[] { settingsItem, separatorItem, aboutItem, exitItem });
+            _menuItems.AddRange(new[] { autoStartItem, separatorItem1, settingsItem, spectrumItem, separatorItem2, aboutItem, exitItem });
 
             // Add items to the menu strip
             if (_contextMenu != null)
@@ -658,22 +735,30 @@ namespace TaskbarEqualizer.SystemTray.ContextMenu
             }
         }
 
+        private void OnAutoStartToggled(IContextMenuItem menuItem)
+        {
+            _logger.LogInformation("Auto-start toggle menu item clicked - new state: {Checked}", menuItem.Checked);
+            // The actual auto-start logic is handled by ApplicationOrchestrator through MenuItemClicked event
+        }
+
         private void OnSettingsClicked(IContextMenuItem menuItem)
         {
             _logger.LogInformation("Settings menu item clicked");
-            // Settings dialog will be implemented later
+            // The settings logic is handled by the ApplicationOrchestrator through the MenuItemClicked event
+            // This method exists primarily for direct action handling if needed
+        }
+
+        private void OnSpectrumClicked(IContextMenuItem menuItem)
+        {
+            _logger.LogInformation("Spectrum analyzer menu item clicked");
+            // The spectrum window logic is handled by the ApplicationContext through the MenuItemClicked event
+            // This method exists primarily for direct action handling if needed
         }
 
         private void OnAboutClicked(IContextMenuItem menuItem)
         {
             _logger.LogInformation("About menu item clicked");
-            
-            MessageBox.Show(
-                "TaskbarEqualizer v1.0\nReal-time audio visualization for Windows 11 taskbar\n\n© 2024 TaskbarEqualizer",
-                "About TaskbarEqualizer",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Information
-            );
+            // About dialog is handled by ApplicationOrchestrator through MenuItemClicked event
         }
 
         private void OnExitClicked(IContextMenuItem menuItem)
@@ -683,6 +768,7 @@ namespace TaskbarEqualizer.SystemTray.ContextMenu
         }
 
         #endregion
+
 
         #region IDisposable Implementation
 

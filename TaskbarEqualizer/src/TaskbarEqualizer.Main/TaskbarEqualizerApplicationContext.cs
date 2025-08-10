@@ -4,6 +4,7 @@ using System.Threading.Tasks;
 using System.Windows.Forms;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using TaskbarEqualizer.Configuration.Interfaces;
 using TaskbarEqualizer.Configuration.Services;
 using TaskbarEqualizer.SystemTray.Interfaces;
 
@@ -142,19 +143,12 @@ namespace TaskbarEqualizer.Main
                         Application.Exit();
                         break;
                     case "about":
-                        MessageBox.Show(
-                            "TaskbarEqualizer - Professional Audio Visualizer\nVersion 1.0\n\nReal-time audio visualization for Windows taskbar",
-                            "About TaskbarEqualizer",
-                            MessageBoxButtons.OK,
-                            MessageBoxIcon.Information);
+                        _logger.LogInformation("About requested from context menu");
+                        ShowAboutDialog();
                         break;
                     case "settings":
                         _logger.LogInformation("Settings requested from context menu");
-                        MessageBox.Show(
-                            "Settings Dialog\n\nThis feature will be implemented in a future version.\n\nFor now, you can configure the application through the system tray options.",
-                            "Settings - Coming Soon",
-                            MessageBoxButtons.OK,
-                            MessageBoxIcon.Information);
+                        ShowSettingsDialog();
                         break;
                     default:
                         _logger.LogDebug("Unhandled menu item: {ItemId}", e.MenuItem.Id);
@@ -164,6 +158,54 @@ namespace TaskbarEqualizer.Main
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error handling menu item click: {ItemId}", e.MenuItem.Id);
+            }
+        }
+
+        /// <summary>
+        /// Shows the settings dialog.
+        /// </summary>
+        private void ShowSettingsDialog()
+        {
+            try
+            {
+                using var settingsDialog = new SettingsDialog(
+                    _serviceProvider.GetRequiredService<ISettingsManager>(),
+                    _serviceProvider.GetRequiredService<ILogger<SettingsDialog>>(),
+                    _serviceProvider);
+
+                var result = settingsDialog.ShowDialog();
+                _logger.LogInformation("Settings dialog closed with result: {Result}", result);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to show settings dialog");
+                MessageBox.Show(
+                    $"Failed to open settings dialog: {ex.Message}",
+                    "Settings Error",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+            }
+        }
+
+        /// <summary>
+        /// Shows the about dialog.
+        /// </summary>
+        private void ShowAboutDialog()
+        {
+            try
+            {
+                var logger = _serviceProvider.GetService<ILogger<AboutDialog>>();
+                var result = AboutDialog.Show(logger);
+                _logger.LogInformation("About dialog closed with result: {Result}", result);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to show about dialog");
+                MessageBox.Show(
+                    $"Failed to open about dialog: {ex.Message}",
+                    "About Error",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
             }
         }
 

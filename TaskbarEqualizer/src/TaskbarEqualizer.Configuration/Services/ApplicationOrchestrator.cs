@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -90,6 +91,26 @@ namespace TaskbarEqualizer.Configuration.Services
         public void SetMainWindow(object mainWindow)
         {
             _mainWindow = mainWindow;
+            
+            // Initialize the spectrum window with current settings if available
+            try
+            {
+                if (_settingsManager.IsLoaded && _mainWindow != null)
+                {
+                    var windowType = _mainWindow.GetType();
+                    var initMethod = windowType.GetMethod("InitializeWithSettings");
+                    
+                    if (initMethod != null)
+                    {
+                        initMethod.Invoke(_mainWindow, new object[] { _settingsManager.Settings });
+                        _logger.LogInformation("Main window initialized with current settings");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to initialize main window with settings");
+            }
         }
 
         #endregion
@@ -194,12 +215,13 @@ namespace TaskbarEqualizer.Configuration.Services
             await _contextMenuManager.InitializeAsync(cancellationToken);
             _logger.LogDebug("Context menu manager initialized");
 
-            // 3. Initialize frequency analyzer
+            // 3. Initialize frequency analyzer with settings-based configuration
+            var settings = _settingsManager.Settings;
             await _frequencyAnalyzer.ConfigureAsync(
                 fftSize: 2048,
                 sampleRate: 44100,
-                frequencyBands: 32,
-                smoothingFactor: 0.3, // Changed from 0.8 to 0.3 for better responsiveness
+                frequencyBands: settings.FrequencyBands,
+                smoothingFactor: settings.SmoothingFactor,
                 cancellationToken);
             _logger.LogDebug("Frequency analyzer configured");
 
@@ -448,11 +470,11 @@ namespace TaskbarEqualizer.Configuration.Services
             try
             {
                 _logger.LogDebug("Settings changed: {ChangedKeys}", string.Join(", ", e.ChangedKeys));
+                var settings = _settingsManager.Settings;
 
                 // Handle auto-start setting changes
                 if (e.ChangedKeys.Contains("StartWithWindows"))
                 {
-                    var settings = _settingsManager.Settings;
                     if (settings.StartWithWindows)
                     {
                         await _autoStartManager.EnableAutoStartAsync();
@@ -464,6 +486,68 @@ namespace TaskbarEqualizer.Configuration.Services
                         _logger.LogInformation("Auto-start disabled via settings");
                     }
                 }
+
+                // Handle spectrum analyzer settings changes
+                var needsFrequencyAnalyzerUpdate = false;
+                var needsSpectrumWindowUpdate = false;
+
+                if (e.ChangedKeys.Contains("FrequencyBands"))
+                {
+                    needsFrequencyAnalyzerUpdate = true;
+                    needsSpectrumWindowUpdate = true;
+                    _logger.LogInformation("Frequency bands changed to: {FrequencyBands}", settings.FrequencyBands);
+                }
+
+                if (e.ChangedKeys.Contains("SmoothingFactor"))
+                {
+                    needsFrequencyAnalyzerUpdate = true;
+                    needsSpectrumWindowUpdate = true;
+                    _logger.LogInformation("Smoothing factor changed to: {SmoothingFactor}", settings.SmoothingFactor);
+                }
+
+                if (e.ChangedKeys.Contains("UpdateInterval"))
+                {
+                    needsSpectrumWindowUpdate = true;
+                    _logger.LogInformation("Update interval changed to: {UpdateInterval}ms", settings.UpdateInterval);
+                }
+
+                if (e.ChangedKeys.Contains("GainFactor"))
+                {
+                    needsSpectrumWindowUpdate = true;
+                    _logger.LogInformation("Gain factor changed to: {GainFactor}", settings.GainFactor);
+                }
+
+                // Additional visualization settings that require overlay updates
+                var visualizationSettings = new[]
+                {
+                    "IconSize", "VisualizationStyle", "RenderQuality", "EnableAnimations", 
+                    "EnableEffects", "UseCustomColors", "CustomPrimaryColor", "CustomSecondaryColor",
+                    "EnableGradient", "GradientDirection", "Opacity", "AnimationSpeed",
+                    "EnableBeatDetection", "EnableSpringPhysics", "SpringStiffness", 
+                    "SpringDamping", "ChangeThreshold", "AdaptiveQuality", "MaxFrameRate"
+                };
+
+                if (visualizationSettings.Any(setting => e.ChangedKeys.Contains(setting)))
+                {
+                    needsSpectrumWindowUpdate = true;
+                    var changedVizSettings = visualizationSettings.Where(setting => e.ChangedKeys.Contains(setting));
+                    _logger.LogInformation("Visualization settings changed: {Settings}", string.Join(", ", changedVizSettings));
+                }
+
+                // Apply frequency analyzer updates
+                if (needsFrequencyAnalyzerUpdate)
+                {
+                    await UpdateFrequencyAnalyzerAsync(settings);
+                }
+
+                // Apply spectrum window updates to TaskbarOverlayManager
+                if (needsSpectrumWindowUpdate)
+                {
+                    await UpdateTaskbarOverlaySettingsAsync(settings);
+                }
+
+                // Save settings after applying changes
+                await _settingsManager.SaveAsync();
             }
             catch (Exception ex)
             {
@@ -575,6 +659,53 @@ namespace TaskbarEqualizer.Configuration.Services
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error during application exit");
+            }
+        }
+
+        /// <summary>
+        /// Updates the frequency analyzer configuration with new settings.
+        /// </summary>
+        /// <param name="settings">The updated application settings.</param>
+        private async Task UpdateFrequencyAnalyzerAsync(ApplicationSettings settings)
+        {
+            try
+            {
+                _logger.LogInformation("Updating frequency analyzer configuration");
+                
+                // Reconfigure the frequency analyzer with new settings
+                await _frequencyAnalyzer.ConfigureAsync(
+                    fftSize: 2048,
+                    sampleRate: 44100,
+                    frequencyBands: settings.FrequencyBands,
+                    smoothingFactor: settings.SmoothingFactor,
+                    cancellationToken: default);
+
+                _logger.LogInformation("Frequency analyzer updated successfully");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to update frequency analyzer configuration");
+            }
+        }
+
+        /// <summary>
+        /// Updates the TaskbarOverlayManager with new visualization settings.
+        /// </summary>
+        /// <param name="settings">The updated application settings.</param>
+        private async Task UpdateTaskbarOverlaySettingsAsync(ApplicationSettings settings)
+        {
+            try
+            {
+                _logger.LogInformation("Updating TaskbarOverlayManager with new settings");
+                
+                // Update the taskbar overlay manager with the new settings
+                await _taskbarOverlayManager.UpdateSettingsAsync(settings);
+                
+                _logger.LogInformation("TaskbarOverlayManager updated successfully with new settings");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to update TaskbarOverlayManager with new settings");
             }
         }
 

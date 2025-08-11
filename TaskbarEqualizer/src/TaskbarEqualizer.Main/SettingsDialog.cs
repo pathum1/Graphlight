@@ -1081,8 +1081,12 @@ namespace TaskbarEqualizer.Main
                     ApplyStartWithWindowsSync(_settings.StartWithWindows);
                 }
 
-                // Save settings synchronously
-                Task.Run(async () => await _settingsManager.SaveAsync()).Wait(5000); // 5 second timeout
+                // Save settings synchronously - using GetAwaiter().GetResult() to avoid deadlock issues
+                var saveTask = _settingsManager.SaveAsync();
+                if (!saveTask.Wait(5000)) // 5 second timeout
+                {
+                    throw new TimeoutException("Settings save operation timed out");
+                }
                 _originalSettings = _settings.Clone();
                 _applyButton.Enabled = false;
                 

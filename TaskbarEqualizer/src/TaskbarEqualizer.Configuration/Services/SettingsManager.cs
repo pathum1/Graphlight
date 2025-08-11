@@ -22,6 +22,7 @@ namespace TaskbarEqualizer.Configuration.Services
         private readonly string _settingsFilePath;
         private readonly string _backupDirectory;
         private readonly object _settingsLock = new();
+        private readonly SemaphoreSlim _saveSemaphore = new(1, 1);
         private readonly Timer _autoSaveTimer;
         
         private ApplicationSettings _settings;
@@ -229,12 +230,15 @@ namespace TaskbarEqualizer.Configuration.Services
             if (_disposed)
                 throw new ObjectDisposedException(nameof(SettingsManager));
 
-            var stopwatch = Stopwatch.StartNew();
-
-            _logger.LogDebug("Saving settings to {SettingsPath}", _settingsFilePath);
-
+            // Prevent concurrent saves using semaphore
+            await _saveSemaphore.WaitAsync(cancellationToken);
+            
             try
             {
+                var stopwatch = Stopwatch.StartNew();
+
+                _logger.LogDebug("Saving settings to {SettingsPath}", _settingsFilePath);
+
                 ApplicationSettings settingsToSave;
                 
                 lock (_settingsLock)
@@ -346,6 +350,10 @@ namespace TaskbarEqualizer.Configuration.Services
             {
                 _logger.LogError(ex, "Failed to save settings");
                 throw;
+            }
+            finally
+            {
+                _saveSemaphore.Release();
             }
         }
 
@@ -863,6 +871,7 @@ namespace TaskbarEqualizer.Configuration.Services
 
                 // Clean up resources
                 _autoSaveTimer?.Dispose();
+                _saveSemaphore?.Dispose();
                 
                 if (_settings != null)
                 {

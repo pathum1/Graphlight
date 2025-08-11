@@ -620,6 +620,13 @@ namespace TaskbarEqualizer.Configuration.Services
                     _logger.LogDebug("Visualization settings changed: {Settings}", string.Join(", ", changedVizSettings));
                 }
 
+                // Handle CustomSettings changes - these can contain color and visualization changes
+                if (e.ChangedKeys.Contains("CustomSettings"))
+                {
+                    needsSpectrumWindowUpdate = true;
+                    _logger.LogDebug("CustomSettings changed - updating spectrum window for potential color/style changes");
+                }
+
                 // Apply audio capture updates
                 if (needsAudioCaptureUpdate)
                 {

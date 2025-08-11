@@ -579,7 +579,6 @@ namespace TaskbarEqualizer.Configuration
                 target.ShowNotifications = ShowNotifications;
                 target.EnableAutoUpdates = EnableAutoUpdates;
                 target.IconSize = IconSize;
-                target.VisualizationStyle = VisualizationStyle;
                 target.RenderQuality = RenderQuality;
                 target.EnableAnimations = EnableAnimations;
                 target.EnableEffects = EnableEffects;
@@ -592,12 +591,6 @@ namespace TaskbarEqualizer.Configuration
                 target.GainFactor = GainFactor;
                 target.ThemeName = ThemeName;
                 target.FollowSystemTheme = FollowSystemTheme;
-                target.CustomPrimaryColor = CustomPrimaryColor;
-                target.CustomSecondaryColor = CustomSecondaryColor;
-                target.UseCustomColors = UseCustomColors;
-                target.EnableGradient = EnableGradient;
-                target.GradientDirection = GradientDirection;
-                target.Opacity = Opacity;
                 target.SettingsShortcut = SettingsShortcut;
                 target.ToggleShortcut = ToggleShortcut;
                 target.EnableGlobalHotkeys = EnableGlobalHotkeys;
@@ -614,6 +607,14 @@ namespace TaskbarEqualizer.Configuration
                 target.LogLevel = LogLevel;
                 target.EnableTelemetry = EnableTelemetry;
                 target.CustomSettings = new Dictionary<string, object>(CustomSettings);
+                // Set visual properties last so they trigger the final events
+                target.CustomPrimaryColor = CustomPrimaryColor;
+                target.CustomSecondaryColor = CustomSecondaryColor;
+                target.UseCustomColors = UseCustomColors;
+                target.EnableGradient = EnableGradient;
+                target.GradientDirection = GradientDirection;
+                target.Opacity = Opacity;
+                target.VisualizationStyle = VisualizationStyle; // Set style last for spectrum analyzer
             }
             finally
             {

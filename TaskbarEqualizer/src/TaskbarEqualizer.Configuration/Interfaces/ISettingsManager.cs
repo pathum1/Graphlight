@@ -145,6 +145,11 @@ namespace TaskbarEqualizer.Configuration.Interfaces
         /// </summary>
         /// <returns>Validation result with any issues found.</returns>
         SettingsValidationResult ValidateSettings();
+
+        /// <summary>
+        /// Marks the settings as dirty (requiring save).
+        /// </summary>
+        void MarkAsDirty();
     }
 
     /// <summary>

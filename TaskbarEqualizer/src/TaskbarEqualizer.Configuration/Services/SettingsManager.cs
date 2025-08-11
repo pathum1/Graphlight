@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading;
@@ -69,6 +70,7 @@ namespace TaskbarEqualizer.Configuration.Services
 
             // Subscribe to settings property changes
             _settings.PropertyChanged += OnSettingsPropertyChanged;
+            _settings.BulkPropertyChanged += OnSettingsBulkPropertyChanged;
 
             _logger.LogDebug("SettingsManager initialized with path: {SettingsPath}", _settingsFilePath);
         }
@@ -159,11 +161,13 @@ namespace TaskbarEqualizer.Configuration.Services
                     {
                         // Unsubscribe from old settings
                         _settings.PropertyChanged -= OnSettingsPropertyChanged;
+                        _settings.BulkPropertyChanged -= OnSettingsBulkPropertyChanged;
                         
                         _settings = loadedSettings;
                         
                         // Subscribe to new settings
                         _settings.PropertyChanged += OnSettingsPropertyChanged;
+                        _settings.BulkPropertyChanged += OnSettingsBulkPropertyChanged;
                         
                         _logger.LogDebug("Settings loaded from file");
                     }
@@ -230,71 +234,98 @@ namespace TaskbarEqualizer.Configuration.Services
             if (_disposed)
                 throw new ObjectDisposedException(nameof(SettingsManager));
 
-            // Prevent concurrent saves using semaphore
-            await _saveSemaphore.WaitAsync(cancellationToken);
+            _logger.LogInformation("SaveAsync called - checking dirty flag. IsDirty: {IsDirty}", _isDirty);
+
+            // Early return if not dirty
+            if (!_isDirty)
+            {
+                _logger.LogInformation("Settings are not dirty, skipping save operation");
+                return;
+            }
+
+            // Prevent concurrent saves using semaphore with timeout
+            _logger.LogDebug("Waiting for save semaphore...");
+            var semaphoreTimeout = TimeSpan.FromSeconds(30); // Generous timeout for semaphore
+            if (!await _saveSemaphore.WaitAsync(semaphoreTimeout, cancellationToken))
+            {
+                _logger.LogError("Failed to acquire save semaphore within {TimeoutSeconds} seconds", semaphoreTimeout.TotalSeconds);
+                throw new TimeoutException($"Settings save semaphore timeout after {semaphoreTimeout.TotalSeconds} seconds");
+            }
+            _logger.LogDebug("Save semaphore acquired");
+            
+            var stopwatch = Stopwatch.StartNew();
             
             try
             {
-                var stopwatch = Stopwatch.StartNew();
-
-                _logger.LogDebug("Saving settings to {SettingsPath}", _settingsFilePath);
+                _logger.LogInformation("Starting settings save operation to {SettingsPath}. IsDirty: {IsDirty}", _settingsFilePath, _isDirty);
 
                 ApplicationSettings settingsToSave;
                 
                 lock (_settingsLock)
                 {
+                    _logger.LogDebug("Cloning settings for save operation");
                     settingsToSave = _settings.Clone();
                 }
 
                 // Serialize to JSON
+                _logger.LogDebug("Serializing settings to JSON...");
                 var json = JsonSerializer.Serialize(settingsToSave, _jsonOptions);
+                _logger.LogDebug("Serialized settings to JSON ({JsonLength} characters)", json.Length);
 
                 // Ensure directory exists
                 var directory = Path.GetDirectoryName(_settingsFilePath);
                 if (!string.IsNullOrEmpty(directory))
                 {
+                    _logger.LogDebug("Creating directory: {Directory}", directory);
                     Directory.CreateDirectory(directory);
                 }
 
                 // Write to temporary file first, then move (atomic operation)
                 var tempPath = _settingsFilePath + ".tmp";
+                _logger.LogDebug("Writing to temporary file: {TempPath}", tempPath);
                 await File.WriteAllTextAsync(tempPath, json, cancellationToken);
+                _logger.LogDebug("Temporary file written successfully");
                 
-                // Atomic file replacement with retry logic for concurrency issues
+                // Robust file replacement - avoid race condition with File.Exists() check
+                // Use File.Copy with overwrite, then delete temp file for maximum compatibility
                 const int maxRetries = 3;
                 Exception? lastException = null;
+                
+                _logger.LogDebug("Starting file replacement operation with {MaxRetries} max retries", maxRetries);
                 
                 for (int attempt = 0; attempt < maxRetries; attempt++)
                 {
                     try
                     {
-                        if (File.Exists(_settingsFilePath))
-                        {
-                            // Use File.Replace for atomic replacement when destination exists
-                            File.Replace(tempPath, _settingsFilePath, null);
-                        }
-                        else
-                        {
-                            // Use File.Move when destination doesn't exist
-                            File.Move(tempPath, _settingsFilePath);
-                        }
+                        _logger.LogDebug("File replacement attempt {Attempt}/{MaxRetries}", attempt + 1, maxRetries);
+                        
+                        // Copy temp file to final destination (overwrites if exists)
+                        _logger.LogDebug("Copying {TempPath} to {SettingsPath}", tempPath, _settingsFilePath);
+                        File.Copy(tempPath, _settingsFilePath, overwrite: true);
+                        _logger.LogDebug("File copy successful");
+                        
+                        // Clean up temp file after successful copy
+                        _logger.LogDebug("Deleting temporary file: {TempPath}", tempPath);
+                        File.Delete(tempPath);
+                        _logger.LogDebug("Temporary file deleted successfully");
                         
                         // Success - break out of retry loop
+                        _logger.LogDebug("File replacement operation completed successfully");
                         break;
-                    }
-                    catch (FileNotFoundException) when (attempt < maxRetries - 1)
-                    {
-                        // File might have been deleted between check and replace - retry
-                        _logger.LogWarning("File not found during replace operation, retrying... (attempt {Attempt}/{MaxRetries})", 
-                            attempt + 1, maxRetries);
-                        lastException = null;
-                        await Task.Delay(50, cancellationToken); // Brief delay before retry
-                        continue;
                     }
                     catch (IOException) when (attempt < maxRetries - 1)
                     {
                         // File might be locked or in use - retry
                         _logger.LogWarning("IO exception during file operation, retrying... (attempt {Attempt}/{MaxRetries})", 
+                            attempt + 1, maxRetries);
+                        lastException = null;
+                        await Task.Delay(100, cancellationToken); // Brief delay before retry
+                        continue;
+                    }
+                    catch (UnauthorizedAccessException) when (attempt < maxRetries - 1)
+                    {
+                        // Permission issue - retry
+                        _logger.LogWarning("Access denied during file operation, retrying... (attempt {Attempt}/{MaxRetries})", 
                             attempt + 1, maxRetries);
                         lastException = null;
                         await Task.Delay(100, cancellationToken); // Brief delay before retry
@@ -348,11 +379,12 @@ namespace TaskbarEqualizer.Configuration.Services
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to save settings");
+                _logger.LogError(ex, "Failed to save settings - Operation failed after {ElapsedMs}ms", stopwatch?.ElapsedMilliseconds ?? 0);
                 throw;
             }
             finally
             {
+                _logger.LogDebug("Releasing save semaphore");
                 _saveSemaphore.Release();
             }
         }
@@ -371,12 +403,14 @@ namespace TaskbarEqualizer.Configuration.Services
                 {
                     // Unsubscribe from old settings
                     _settings.PropertyChanged -= OnSettingsPropertyChanged;
+                    _settings.BulkPropertyChanged -= OnSettingsBulkPropertyChanged;
                     
                     // Create new default settings
                     _settings = ApplicationSettings.CreateDefault();
                     
                     // Subscribe to new settings
                     _settings.PropertyChanged += OnSettingsPropertyChanged;
+                    _settings.BulkPropertyChanged += OnSettingsBulkPropertyChanged;
                     
                     _isDirty = true;
                 }
@@ -498,6 +532,18 @@ namespace TaskbarEqualizer.Configuration.Services
             await SetSettingAsync(key, value, autoSave);
         }
 
+        /// <summary>
+        /// Marks the settings as dirty (requiring save).
+        /// </summary>
+        public void MarkAsDirty()
+        {
+            lock (_settingsLock)
+            {
+                _isDirty = true;
+            }
+            _logger.LogDebug("Settings manually marked as dirty");
+        }
+
         /// <inheritdoc />
         public bool HasSetting(string key)
         {
@@ -584,11 +630,13 @@ namespace TaskbarEqualizer.Configuration.Services
                     {
                         // Unsubscribe from old settings
                         _settings.PropertyChanged -= OnSettingsPropertyChanged;
+                        _settings.BulkPropertyChanged -= OnSettingsBulkPropertyChanged;
                         
                         _settings = importedSettings;
                         
                         // Subscribe to new settings
                         _settings.PropertyChanged += OnSettingsPropertyChanged;
+                        _settings.BulkPropertyChanged += OnSettingsBulkPropertyChanged;
                         
                         _isDirty = true;
                     }
@@ -812,6 +860,29 @@ namespace TaskbarEqualizer.Configuration.Services
             OnPropertyChanged(e.PropertyName);
         }
 
+        private void OnSettingsBulkPropertyChanged(object? sender, BulkPropertyChangedEventArgs e)
+        {
+            lock (_settingsLock)
+            {
+                _isDirty = true;
+            }
+
+            // Fire a single SettingsChanged event with all changed properties
+            if (e.ChangedProperties.Count > 0)
+            {
+                var settingsChangedArgs = new SettingsChangedEventArgs(
+                    e.ChangedProperties.ToList(), 
+                    SettingsChangeReason.UserModified);
+                SettingsChanged?.Invoke(this, settingsChangedArgs);
+                
+                _logger.LogDebug("Settings bulk changed: {ChangedProperties}, fired single SettingsChanged event", 
+                    string.Join(", ", e.ChangedProperties));
+            }
+
+            // Fire PropertyChanged for the manager itself (for any listeners)
+            OnPropertyChanged(nameof(Settings));
+        }
+
         private void AutoSaveCallback(object? state)
         {
             if (_disposed || !_autoSaveEnabled || !_isDirty)
@@ -876,6 +947,7 @@ namespace TaskbarEqualizer.Configuration.Services
                 if (_settings != null)
                 {
                     _settings.PropertyChanged -= OnSettingsPropertyChanged;
+                    _settings.BulkPropertyChanged -= OnSettingsBulkPropertyChanged;
                 }
 
                 _logger.LogDebug("SettingsManager disposed");

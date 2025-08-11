@@ -1072,8 +1072,13 @@ namespace TaskbarEqualizer.Main
 
                 _logger.LogDebug("Applying settings changes to live settings instance");
 
-                // Copy the dialog settings to the actual settings instance
-                _settings.CopyTo(_settingsManager.Settings);
+                // Copy the dialog settings to the actual settings instance and fire events
+                // We'll fire events first, then save - this ensures visual updates happen even if save times out
+                _logger.LogDebug("Copying settings and firing update events");
+                _settings.CopyTo(_settingsManager.Settings, suppressEvents: false);
+
+                // Explicitly mark settings as dirty since bulk update might not trigger it immediately
+                _settingsManager.MarkAsDirty();
 
                 // Apply startup registry setting synchronously
                 if (_settings.StartWithWindows != _originalSettings.StartWithWindows)
@@ -1082,11 +1087,39 @@ namespace TaskbarEqualizer.Main
                 }
 
                 // Save settings synchronously - using GetAwaiter().GetResult() to avoid deadlock issues
+                _logger.LogInformation("Starting synchronous save operation with 10 second timeout");
                 var saveTask = _settingsManager.SaveAsync();
-                if (!saveTask.Wait(5000)) // 5 second timeout
+                var saveStopwatch = System.Diagnostics.Stopwatch.StartNew();
+                
+                if (!saveTask.Wait(10000)) // 10 second timeout
                 {
-                    throw new TimeoutException("Settings save operation timed out");
+                    saveStopwatch.Stop();
+                    _logger.LogError("Settings save operation timed out after {ElapsedMs}ms. Task status: {TaskStatus}. " +
+                        "The save operation may still complete in the background.", 
+                        saveStopwatch.ElapsedMilliseconds, saveTask.Status);
+                    
+                    // Don't throw immediately - give a brief moment to see if task completes
+                    if (!saveTask.Wait(1000)) // Give it one more second
+                    {
+                        _logger.LogWarning("Save task still not complete after additional 1 second. Settings have been applied to UI but save is still pending.");
+                        
+                        // Don't throw exception - settings have been applied to UI, save is just delayed
+                        // Complete the method normally so UI updates are preserved
+                        _logger.LogInformation("Continuing with settings application despite save timeout - UI changes preserved");
+                        saveStopwatch.Stop();
+                        _originalSettings = _settings.Clone();
+                        _applyButton.Enabled = false;
+                        _logger.LogWarning("Settings applied to UI successfully, but save operation is still pending in background");
+                        return; // Exit without throwing
+                    }
+                    else
+                    {
+                        _logger.LogInformation("Save task completed during extended timeout period");
+                    }
                 }
+                
+                saveStopwatch.Stop();
+                _logger.LogInformation("Synchronous save operation completed in {ElapsedMs}ms", saveStopwatch.ElapsedMilliseconds);
                 _originalSettings = _settings.Clone();
                 _applyButton.Enabled = false;
                 
@@ -1217,16 +1250,26 @@ namespace TaskbarEqualizer.Main
 
                 _logger.LogDebug("Applying settings changes to live settings instance (async)");
 
-                // Copy the dialog settings to the actual settings instance
-                _settings.CopyTo(_settingsManager.Settings);
+                // Copy the dialog settings to the actual settings instance using bulk update to avoid event storm
+                _logger.LogInformation("Copying dialog settings to manager settings using bulk update");
+                _settings.CopyTo(_settingsManager.Settings, suppressEvents: true);
+                _logger.LogDebug("Settings copy completed");
+
+                // Explicitly mark settings as dirty since bulk update might not trigger it immediately
+                _logger.LogDebug("Explicitly marking settings as dirty");
+                _settingsManager.MarkAsDirty();
+                _logger.LogDebug("Settings marked as dirty. Manager IsDirty: {IsDirty}", _settingsManager.IsDirty);
 
                 // Apply startup registry setting
                 if (_settings.StartWithWindows != _originalSettings.StartWithWindows)
                 {
+                    _logger.LogDebug("Applying startup registry setting: {StartWithWindows}", _settings.StartWithWindows);
                     await ApplyStartWithWindows(_settings.StartWithWindows);
                 }
 
+                _logger.LogInformation("Starting async save operation");
                 await _settingsManager.SaveAsync();
+                _logger.LogInformation("Async save operation completed successfully");
                 _originalSettings = _settings.Clone();
                 _applyButton.Enabled = false;
                 

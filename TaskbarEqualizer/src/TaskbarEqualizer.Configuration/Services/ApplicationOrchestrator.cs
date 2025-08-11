@@ -564,7 +564,7 @@ namespace TaskbarEqualizer.Configuration.Services
                 if (e.ChangedKeys.Contains("SelectedAudioDevice"))
                 {
                     needsAudioCaptureUpdate = true;
-                    _logger.LogInformation("Selected audio device changed to: {AudioDevice}", settings.SelectedAudioDevice);
+                    _logger.LogDebug("Selected audio device changed to: {AudioDevice}", settings.SelectedAudioDevice);
                 }
 
                 // Handle spectrum analyzer settings changes
@@ -575,32 +575,32 @@ namespace TaskbarEqualizer.Configuration.Services
                 {
                     needsFrequencyAnalyzerUpdate = true;
                     needsSpectrumWindowUpdate = true;
-                    _logger.LogInformation("Frequency bands changed to: {FrequencyBands}", settings.FrequencyBands);
+                    _logger.LogDebug("Frequency bands changed to: {FrequencyBands}", settings.FrequencyBands);
                 }
 
                 if (e.ChangedKeys.Contains("SmoothingFactor"))
                 {
                     needsFrequencyAnalyzerUpdate = true;
                     needsSpectrumWindowUpdate = true;
-                    _logger.LogInformation("Smoothing factor changed to: {SmoothingFactor}", settings.SmoothingFactor);
+                    _logger.LogDebug("Smoothing factor changed to: {SmoothingFactor}", settings.SmoothingFactor);
                 }
 
                 if (e.ChangedKeys.Contains("UpdateInterval"))
                 {
                     needsSpectrumWindowUpdate = true;
-                    _logger.LogInformation("Update interval changed to: {UpdateInterval}ms", settings.UpdateInterval);
+                    _logger.LogDebug("Update interval changed to: {UpdateInterval}ms", settings.UpdateInterval);
                 }
 
                 if (e.ChangedKeys.Contains("GainFactor"))
                 {
                     needsSpectrumWindowUpdate = true;
-                    _logger.LogInformation("Gain factor changed to: {GainFactor}", settings.GainFactor);
+                    _logger.LogDebug("Gain factor changed to: {GainFactor}", settings.GainFactor);
                 }
 
                 if (e.ChangedKeys.Contains("VolumeThreshold"))
                 {
                     needsSpectrumWindowUpdate = true;
-                    _logger.LogInformation("Volume threshold changed to: {VolumeThreshold}", settings.VolumeThreshold);
+                    _logger.LogDebug("Volume threshold changed to: {VolumeThreshold}", settings.VolumeThreshold);
                 }
 
                 // Additional visualization settings that require overlay updates
@@ -617,7 +617,7 @@ namespace TaskbarEqualizer.Configuration.Services
                 {
                     needsSpectrumWindowUpdate = true;
                     var changedVizSettings = visualizationSettings.Where(setting => e.ChangedKeys.Contains(setting));
-                    _logger.LogInformation("Visualization settings changed: {Settings}", string.Join(", ", changedVizSettings));
+                    _logger.LogDebug("Visualization settings changed: {Settings}", string.Join(", ", changedVizSettings));
                 }
 
                 // Apply audio capture updates
@@ -639,8 +639,8 @@ namespace TaskbarEqualizer.Configuration.Services
                     await UpdateSpectrumWindowSettings(settings);
                 }
 
-                // Save settings after applying changes
-                await _settingsManager.SaveAsync();
+                // Note: Settings are already saved by the caller (SettingsDialog or other source)
+                // Removing duplicate SaveAsync call to prevent conflicts with bulk update mechanism
             }
             catch (Exception ex)
             {

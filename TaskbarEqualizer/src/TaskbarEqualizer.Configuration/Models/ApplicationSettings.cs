@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Drawing;
+using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text.Json.Serialization;
 using System.Windows.Forms;
@@ -15,6 +16,10 @@ namespace TaskbarEqualizer.Configuration
     /// </summary>
     public class ApplicationSettings : INotifyPropertyChanged
     {
+        /// <summary>
+        /// Fired when multiple properties are changed in a bulk operation.
+        /// </summary>
+        public event EventHandler<BulkPropertyChangedEventArgs>? BulkPropertyChanged;
         #region Private Fields
 
         private bool _startWithWindows = false;
@@ -57,6 +62,10 @@ namespace TaskbarEqualizer.Configuration
         private LogLevel _logLevel = LogLevel.Information;
         private bool _enableTelemetry = false;
         private Dictionary<string, object> _customSettings = new();
+
+        // Bulk update support
+        private bool _isBulkUpdating = false;
+        private HashSet<string> _bulkChangedProperties = new();
 
         #endregion
 
@@ -124,6 +133,7 @@ namespace TaskbarEqualizer.Configuration
         /// <summary>
         /// Style of the equalizer visualization.
         /// </summary>
+        [JsonPropertyName("visualizationStyle")]
         public EqualizerStyle VisualizationStyle
         {
             get => _visualizationStyle;
@@ -311,6 +321,7 @@ namespace TaskbarEqualizer.Configuration
         /// <summary>
         /// Whether to use custom colors instead of theme colors.
         /// </summary>
+        [JsonPropertyName("useCustomColors")]
         public bool UseCustomColors
         {
             get => _useCustomColors;
@@ -541,51 +552,115 @@ namespace TaskbarEqualizer.Configuration
         /// <param name="target">Target settings instance.</param>
         public void CopyTo(ApplicationSettings target)
         {
+            CopyTo(target, suppressEvents: false);
+        }
+
+        /// <summary>
+        /// Copies settings values to another instance with optional event suppression.
+        /// </summary>
+        /// <param name="target">Target settings instance.</param>
+        /// <param name="suppressEvents">Whether to suppress PropertyChanged events during copy.</param>
+        public void CopyTo(ApplicationSettings target, bool suppressEvents)
+        {
             if (target == null)
                 throw new ArgumentNullException(nameof(target));
 
-            target.Version = Version;
-            target.LastModified = LastModified;
-            target.StartWithWindows = StartWithWindows;
-            target.StartMinimized = StartMinimized;
-            target.ShowNotifications = ShowNotifications;
-            target.EnableAutoUpdates = EnableAutoUpdates;
-            target.IconSize = IconSize;
-            target.VisualizationStyle = VisualizationStyle;
-            target.RenderQuality = RenderQuality;
-            target.EnableAnimations = EnableAnimations;
-            target.EnableEffects = EnableEffects;
-            target.UpdateInterval = UpdateInterval;
-            target.SelectedAudioDevice = SelectedAudioDevice;
-            target.EnableAutoDeviceSwitch = EnableAutoDeviceSwitch;
-            target.VolumeThreshold = VolumeThreshold;
-            target.FrequencyBands = FrequencyBands;
-            target.SmoothingFactor = SmoothingFactor;
-            target.GainFactor = GainFactor;
-            target.ThemeName = ThemeName;
-            target.FollowSystemTheme = FollowSystemTheme;
-            target.CustomPrimaryColor = CustomPrimaryColor;
-            target.CustomSecondaryColor = CustomSecondaryColor;
-            target.UseCustomColors = UseCustomColors;
-            target.EnableGradient = EnableGradient;
-            target.GradientDirection = GradientDirection;
-            target.Opacity = Opacity;
-            target.SettingsShortcut = SettingsShortcut;
-            target.ToggleShortcut = ToggleShortcut;
-            target.EnableGlobalHotkeys = EnableGlobalHotkeys;
-            target.AnimationSpeed = AnimationSpeed;
-            target.EnableBeatDetection = EnableBeatDetection;
-            target.EnableSpringPhysics = EnableSpringPhysics;
-            target.SpringStiffness = SpringStiffness;
-            target.SpringDamping = SpringDamping;
-            target.ChangeThreshold = ChangeThreshold;
-            target.AdaptiveQuality = AdaptiveQuality;
-            target.MaxFrameRate = MaxFrameRate;
-            target.VsyncEnabled = VsyncEnabled;
-            target.DebugMode = DebugMode;
-            target.LogLevel = LogLevel;
-            target.EnableTelemetry = EnableTelemetry;
-            target.CustomSettings = new Dictionary<string, object>(CustomSettings);
+            if (suppressEvents)
+            {
+                target.BeginBulkUpdate();
+            }
+
+            try
+            {
+                target.Version = Version;
+                target.LastModified = LastModified;
+                target.StartWithWindows = StartWithWindows;
+                target.StartMinimized = StartMinimized;
+                target.ShowNotifications = ShowNotifications;
+                target.EnableAutoUpdates = EnableAutoUpdates;
+                target.IconSize = IconSize;
+                target.VisualizationStyle = VisualizationStyle;
+                target.RenderQuality = RenderQuality;
+                target.EnableAnimations = EnableAnimations;
+                target.EnableEffects = EnableEffects;
+                target.UpdateInterval = UpdateInterval;
+                target.SelectedAudioDevice = SelectedAudioDevice;
+                target.EnableAutoDeviceSwitch = EnableAutoDeviceSwitch;
+                target.VolumeThreshold = VolumeThreshold;
+                target.FrequencyBands = FrequencyBands;
+                target.SmoothingFactor = SmoothingFactor;
+                target.GainFactor = GainFactor;
+                target.ThemeName = ThemeName;
+                target.FollowSystemTheme = FollowSystemTheme;
+                target.CustomPrimaryColor = CustomPrimaryColor;
+                target.CustomSecondaryColor = CustomSecondaryColor;
+                target.UseCustomColors = UseCustomColors;
+                target.EnableGradient = EnableGradient;
+                target.GradientDirection = GradientDirection;
+                target.Opacity = Opacity;
+                target.SettingsShortcut = SettingsShortcut;
+                target.ToggleShortcut = ToggleShortcut;
+                target.EnableGlobalHotkeys = EnableGlobalHotkeys;
+                target.AnimationSpeed = AnimationSpeed;
+                target.EnableBeatDetection = EnableBeatDetection;
+                target.EnableSpringPhysics = EnableSpringPhysics;
+                target.SpringStiffness = SpringStiffness;
+                target.SpringDamping = SpringDamping;
+                target.ChangeThreshold = ChangeThreshold;
+                target.AdaptiveQuality = AdaptiveQuality;
+                target.MaxFrameRate = MaxFrameRate;
+                target.VsyncEnabled = VsyncEnabled;
+                target.DebugMode = DebugMode;
+                target.LogLevel = LogLevel;
+                target.EnableTelemetry = EnableTelemetry;
+                target.CustomSettings = new Dictionary<string, object>(CustomSettings);
+            }
+            finally
+            {
+                if (suppressEvents)
+                {
+                    target.EndBulkUpdate();
+                }
+            }
+        }
+
+        /// <summary>
+        /// Begins a bulk update operation, suppressing PropertyChanged events.
+        /// </summary>
+        public void BeginBulkUpdate()
+        {
+            _isBulkUpdating = true;
+            _bulkChangedProperties.Clear();
+        }
+
+        /// <summary>
+        /// Ends a bulk update operation and fires a single BulkPropertyChanged event with all changed properties.
+        /// </summary>
+        public void EndBulkUpdate()
+        {
+            if (!_isBulkUpdating)
+                return;
+
+            _isBulkUpdating = false;
+
+            // Fire a single bulk event with all changed properties if any changed
+            if (_bulkChangedProperties.Count > 0)
+            {
+                // Update LastModified once for all changes
+                LastModified = DateTime.UtcNow;
+                
+                // Fire single bulk event with all changed properties
+                var changedPropertiesList = _bulkChangedProperties.ToList();
+                BulkPropertyChanged?.Invoke(this, new BulkPropertyChangedEventArgs(changedPropertiesList));
+                
+                // Also fire individual PropertyChanged events for UI binding compatibility
+                foreach (var propertyName in changedPropertiesList)
+                {
+                    OnPropertyChanged(propertyName);
+                }
+                
+                _bulkChangedProperties.Clear();
+            }
         }
 
         /// <summary>
@@ -621,8 +696,22 @@ namespace TaskbarEqualizer.Configuration
                 return false;
 
             field = value;
-            LastModified = DateTime.UtcNow;
-            OnPropertyChanged(propertyName);
+
+            if (_isBulkUpdating)
+            {
+                // During bulk update, just collect the changed property name
+                if (!string.IsNullOrEmpty(propertyName))
+                {
+                    _bulkChangedProperties.Add(propertyName);
+                }
+            }
+            else
+            {
+                // Normal operation - fire event immediately
+                LastModified = DateTime.UtcNow;
+                OnPropertyChanged(propertyName);
+            }
+
             return true;
         }
 
@@ -650,5 +739,25 @@ namespace TaskbarEqualizer.Configuration
         Error = 4,
         Critical = 5,
         None = 6
+    }
+
+    /// <summary>
+    /// Event arguments for bulk property change notifications.
+    /// </summary>
+    public class BulkPropertyChangedEventArgs : EventArgs
+    {
+        /// <summary>
+        /// Gets the list of property names that changed.
+        /// </summary>
+        public IReadOnlyList<string> ChangedProperties { get; }
+
+        /// <summary>
+        /// Initializes a new instance of the BulkPropertyChangedEventArgs class.
+        /// </summary>
+        /// <param name="changedProperties">The list of property names that changed.</param>
+        public BulkPropertyChangedEventArgs(IReadOnlyList<string> changedProperties)
+        {
+            ChangedProperties = changedProperties ?? throw new ArgumentNullException(nameof(changedProperties));
+        }
     }
 }

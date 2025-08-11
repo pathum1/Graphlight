@@ -150,7 +150,7 @@ namespace TaskbarEqualizer.Core.Audio
                     return;
                 }
 
-                _logger.LogDebug("Queued audio samples for processing: {SampleCount} samples", copyCount);
+                // Suppress frequent debug logging - audio queuing is working normally
             }
             catch (Exception ex)
             {
@@ -172,8 +172,8 @@ namespace TaskbarEqualizer.Core.Audio
             if (sampleRate <= 0)
                 throw new ArgumentException("Sample rate must be positive", nameof(sampleRate));
 
-            if (frequencyBands < 8 || frequencyBands > 32)
-                throw new ArgumentException("Frequency bands must be between 8 and 32", nameof(frequencyBands));
+            if (frequencyBands < 4 || frequencyBands > 64)
+                throw new ArgumentException("Frequency bands must be between 4 and 64", nameof(frequencyBands));
 
             if (smoothingFactor < 0.0 || smoothingFactor > 1.0)
                 throw new ArgumentException("Smoothing factor must be between 0.0 and 1.0", nameof(smoothingFactor));
@@ -314,7 +314,7 @@ namespace TaskbarEqualizer.Core.Audio
             if (_disposed)
                 throw new ObjectDisposedException(nameof(FrequencyAnalyzer));
 
-            if (frequencyBands < 8 || frequencyBands > 32)
+            if (frequencyBands < 4 || frequencyBands > 64)
                 throw new ArgumentOutOfRangeException(nameof(frequencyBands));
 
             _logger.LogInformation("Updating frequency bands to {FrequencyBands}", frequencyBands);
@@ -519,8 +519,7 @@ namespace TaskbarEqualizer.Core.Audio
 
             try
             {
-                _logger.LogDebug("Starting audio sample processing: samples={Count}, fftSize={FftSize}", 
-                    item.SampleCount, _config.FftSize);
+                // Suppress frequent debug logging - processing is working normally
                 // Ensure buffers are initialized
                 if (_fftBuffer == null || _window == null || _magnitudeBuffer == null || _currentSpectrum == null)
                 {
@@ -530,7 +529,7 @@ namespace TaskbarEqualizer.Core.Audio
                 
                 // Apply windowing and copy to FFT buffer
                 var samplesToProcess = Math.Min(item.SampleCount, _config.FftSize);
-                _logger.LogDebug("Processing {SamplesToProcess} samples", samplesToProcess);
+                // Processing samples - debug logging suppressed for performance
                 
                 for (int i = 0; i < samplesToProcess; i++)
                 {
@@ -544,9 +543,7 @@ namespace TaskbarEqualizer.Core.Audio
                 }
 
                 // Perform FFT
-                _logger.LogDebug("Performing FFT on {Size} samples", _fftBuffer.Length);
                 var fftResult = FftSharp.FFT.Forward(_fftBuffer);
-                _logger.LogDebug("FFT completed, result length: {Length}", fftResult.Length);
 
                 // Calculate magnitudes
                 for (int i = 0; i < _magnitudeBuffer!.Length; i++)
@@ -557,11 +554,9 @@ namespace TaskbarEqualizer.Core.Audio
                 }
 
                 // Map FFT bins to frequency bands
-                _logger.LogDebug("Mapping frequency bands");
                 MapFrequencyBands();
 
                 // Apply smoothing
-                _logger.LogDebug("Applying smoothing");
                 ApplySmoothing();
 
                 // Calculate statistics
@@ -583,9 +578,7 @@ namespace TaskbarEqualizer.Core.Audio
                 // Calculate processing latency
                 var processingLatency = TimeSpan.FromMilliseconds(Environment.TickCount64 - startTime);
 
-                // Fire event
-                _logger.LogDebug("Firing spectrum event: peak={Peak:F3}, rms={Rms:F3}, bands={Bands}", 
-                    peakValue, rmsLevel, spectrum.Length);
+                // Fire event - spectrum data ready
                 SpectrumDataAvailable?.Invoke(this, new SpectrumDataEventArgs(
                     spectrum, _config.FrequencyBands, peakValue, peakBandIndex, 
                     item.TimestampTicks, processingLatency, rmsLevel));

@@ -256,14 +256,77 @@ namespace TaskbarEqualizer.Configuration.Services
                 var tempPath = _settingsFilePath + ".tmp";
                 await File.WriteAllTextAsync(tempPath, json, cancellationToken);
                 
-                // Move temp file to actual location
-                if (File.Exists(_settingsFilePath))
+                // Atomic file replacement with retry logic for concurrency issues
+                const int maxRetries = 3;
+                Exception? lastException = null;
+                
+                for (int attempt = 0; attempt < maxRetries; attempt++)
                 {
-                    File.Replace(tempPath, _settingsFilePath, null);
+                    try
+                    {
+                        if (File.Exists(_settingsFilePath))
+                        {
+                            // Use File.Replace for atomic replacement when destination exists
+                            File.Replace(tempPath, _settingsFilePath, null);
+                        }
+                        else
+                        {
+                            // Use File.Move when destination doesn't exist
+                            File.Move(tempPath, _settingsFilePath);
+                        }
+                        
+                        // Success - break out of retry loop
+                        break;
+                    }
+                    catch (FileNotFoundException) when (attempt < maxRetries - 1)
+                    {
+                        // File might have been deleted between check and replace - retry
+                        _logger.LogWarning("File not found during replace operation, retrying... (attempt {Attempt}/{MaxRetries})", 
+                            attempt + 1, maxRetries);
+                        lastException = null;
+                        await Task.Delay(50, cancellationToken); // Brief delay before retry
+                        continue;
+                    }
+                    catch (IOException) when (attempt < maxRetries - 1)
+                    {
+                        // File might be locked or in use - retry
+                        _logger.LogWarning("IO exception during file operation, retrying... (attempt {Attempt}/{MaxRetries})", 
+                            attempt + 1, maxRetries);
+                        lastException = null;
+                        await Task.Delay(100, cancellationToken); // Brief delay before retry
+                        continue;
+                    }
+                    catch (Exception ex) when (attempt < maxRetries - 1)
+                    {
+                        lastException = ex;
+                        _logger.LogWarning(ex, "Exception during file operation, retrying... (attempt {Attempt}/{MaxRetries})", 
+                            attempt + 1, maxRetries);
+                        await Task.Delay(100, cancellationToken); // Brief delay before retry
+                        continue;
+                    }
+                    catch (Exception ex)
+                    {
+                        // Final attempt failed - clean up temp file and rethrow
+                        lastException = ex;
+                        try
+                        {
+                            if (File.Exists(tempPath))
+                            {
+                                File.Delete(tempPath);
+                            }
+                        }
+                        catch
+                        {
+                            // Ignore cleanup errors
+                        }
+                        break;
+                    }
                 }
-                else
+                
+                // If we have a last exception, the operation ultimately failed
+                if (lastException != null)
                 {
-                    File.Move(tempPath, _settingsFilePath);
+                    throw lastException;
                 }
 
                 lock (_settingsLock)

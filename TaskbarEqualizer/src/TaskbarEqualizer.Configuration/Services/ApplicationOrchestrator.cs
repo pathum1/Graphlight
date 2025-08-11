@@ -362,15 +362,7 @@ namespace TaskbarEqualizer.Configuration.Services
                     return;
                 }
 
-                // Reduce logging frequency for performance - only log significant changes
-                var shouldLog = _logger.IsEnabled(Microsoft.Extensions.Logging.LogLevel.Trace) || 
-                               (e.PeakValue > 0.1 && DateTime.Now.Millisecond % 500 < 50);
-                
-                if (shouldLog)
-                {
-                    _logger.LogDebug("Received spectrum data: peak={Peak:F3}, rms={Rms:F3}, bands={Bands}", 
-                        e.PeakValue, e.RmsLevel, e.Spectrum?.Length ?? 0);
-                }
+                // Spectrum data logging suppressed for performance - enable Trace level if needed for debugging
                 
                 // Update taskbar overlay
                 _taskbarOverlayManager.UpdateVisualization(e);

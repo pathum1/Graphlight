@@ -46,6 +46,7 @@ namespace TaskbarEqualizer.Configuration
         private bool _enableGradient = true;
         private GradientDirection _gradientDirection = GradientDirection.Vertical;
         private float _opacity = 1.0f;
+        private Point _windowLocation = Point.Empty;
         private Keys _settingsShortcut = Keys.Control | Keys.S;
         private Keys _toggleShortcut = Keys.Control | Keys.Alt | Keys.E;
         private bool _enableGlobalHotkeys = true;
@@ -355,6 +356,54 @@ namespace TaskbarEqualizer.Configuration
             set => SetProperty(ref _opacity, Math.Max(0.1f, Math.Min(1.0f, value)));
         }
 
+        /// <summary>
+        /// Saved window location for the main spectrum analyzer window.
+        /// </summary>
+        [JsonIgnore]
+        public Point WindowLocation
+        {
+            get => _windowLocation;
+            set => SetProperty(ref _windowLocation, value);
+        }
+
+        /// <summary>
+        /// Window location as string for JSON serialization (X,Y format).
+        /// </summary>
+        [JsonPropertyName("WindowLocation")]
+        public string WindowLocationString
+        {
+            get => _windowLocation == Point.Empty ? string.Empty : $"{_windowLocation.X},{_windowLocation.Y}";
+            set
+            {
+                try
+                {
+                    if (string.IsNullOrEmpty(value))
+                    {
+                        _windowLocation = Point.Empty;
+                    }
+                    else
+                    {
+                        var parts = value.Split(',');
+                        if (parts.Length == 2 && 
+                            int.TryParse(parts[0], out int x) && 
+                            int.TryParse(parts[1], out int y))
+                        {
+                            _windowLocation = new Point(x, y);
+                        }
+                        else
+                        {
+                            _windowLocation = Point.Empty;
+                        }
+                    }
+                    OnPropertyChanged(nameof(WindowLocation));
+                }
+                catch
+                {
+                    _windowLocation = Point.Empty;
+                }
+            }
+        }
+
         #endregion
 
         #region Hotkey Settings
@@ -614,6 +663,7 @@ namespace TaskbarEqualizer.Configuration
                 target.EnableGradient = EnableGradient;
                 target.GradientDirection = GradientDirection;
                 target.Opacity = Opacity;
+                target.WindowLocation = WindowLocation;
                 target.VisualizationStyle = VisualizationStyle; // Set style last for spectrum analyzer
             }
             finally

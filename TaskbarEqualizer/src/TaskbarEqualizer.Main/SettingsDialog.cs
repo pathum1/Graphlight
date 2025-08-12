@@ -1072,10 +1072,10 @@ namespace TaskbarEqualizer.Main
 
                 _logger.LogDebug("Applying settings changes to live settings instance");
 
-                // Copy the dialog settings to the actual settings instance and fire events
-                // We'll fire events first, then save - this ensures visual updates happen even if save times out
-                _logger.LogDebug("Copying settings and firing update events");
-                _settings.CopyTo(_settingsManager.Settings, suppressEvents: false);
+                // Copy the dialog settings to the actual settings instance using bulk update to prevent event flooding
+                // Apply changes immediately for instant UI updates
+                _logger.LogDebug("Copying settings using bulk update to prevent event flooding");
+                _settings.CopyTo(_settingsManager.Settings, suppressEvents: true);
 
                 // Explicitly mark settings as dirty since bulk update might not trigger it immediately
                 _settingsManager.MarkAsDirty();
@@ -1086,40 +1086,25 @@ namespace TaskbarEqualizer.Main
                     ApplyStartWithWindowsSync(_settings.StartWithWindows);
                 }
 
-                // Save settings synchronously - using GetAwaiter().GetResult() to avoid deadlock issues
-                _logger.LogInformation("Starting synchronous save operation with 10 second timeout");
-                var saveTask = _settingsManager.SaveAsync();
-                var saveStopwatch = System.Diagnostics.Stopwatch.StartNew();
-                
-                if (!saveTask.Wait(10000)) // 10 second timeout
+                // Schedule async save operation without blocking UI
+                _logger.LogInformation("Scheduling async save operation in background");
+                _ = Task.Run(async () =>
                 {
-                    saveStopwatch.Stop();
-                    _logger.LogError("Settings save operation timed out after {ElapsedMs}ms. Task status: {TaskStatus}. " +
-                        "The save operation may still complete in the background.", 
-                        saveStopwatch.ElapsedMilliseconds, saveTask.Status);
-                    
-                    // Don't throw immediately - give a brief moment to see if task completes
-                    if (!saveTask.Wait(1000)) // Give it one more second
+                    try
                     {
-                        _logger.LogWarning("Save task still not complete after additional 1 second. Settings have been applied to UI but save is still pending.");
-                        
-                        // Don't throw exception - settings have been applied to UI, save is just delayed
-                        // Complete the method normally so UI updates are preserved
-                        _logger.LogInformation("Continuing with settings application despite save timeout - UI changes preserved");
+                        var saveStopwatch = System.Diagnostics.Stopwatch.StartNew();
+                        await _settingsManager.SaveAsync();
                         saveStopwatch.Stop();
-                        _originalSettings = _settings.Clone();
-                        _applyButton.Enabled = false;
-                        _logger.LogWarning("Settings applied to UI successfully, but save operation is still pending in background");
-                        return; // Exit without throwing
+                        _logger.LogInformation("Background save operation completed in {ElapsedMs}ms", saveStopwatch.ElapsedMilliseconds);
                     }
-                    else
+                    catch (Exception ex)
                     {
-                        _logger.LogInformation("Save task completed during extended timeout period");
+                        _logger.LogError(ex, "Background save operation failed: {Message}", ex.Message);
+                        // Don't propagate error to UI since settings are already applied
                     }
-                }
+                });
                 
-                saveStopwatch.Stop();
-                _logger.LogInformation("Synchronous save operation completed in {ElapsedMs}ms", saveStopwatch.ElapsedMilliseconds);
+                // Update UI state immediately - don't wait for save
                 _originalSettings = _settings.Clone();
                 _applyButton.Enabled = false;
                 

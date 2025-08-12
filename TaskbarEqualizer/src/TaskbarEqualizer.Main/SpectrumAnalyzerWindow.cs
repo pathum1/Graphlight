@@ -81,6 +81,8 @@ namespace TaskbarEqualizer.Main
             // Handle resize
             Resize += SpectrumAnalyzerWindow_Resize;
             
+            // Handle location changes for position persistence
+            LocationChanged += SpectrumAnalyzerWindow_LocationChanged;
             
             _logger.LogInformation("Spectrum analyzer window initialized");
         }
@@ -97,6 +99,9 @@ namespace TaskbarEqualizer.Main
 
         private void SpectrumAnalyzerWindow_FormClosing(object? sender, FormClosingEventArgs e)
         {
+            // Save window location before closing/hiding
+            SaveWindowLocation();
+            
             // Minimize to tray instead of closing
             if (e.CloseReason == CloseReason.UserClosing)
             {
@@ -105,6 +110,62 @@ namespace TaskbarEqualizer.Main
                 ShowInTaskbar = false;
                 _logger.LogInformation("Window minimized to system tray");
             }
+        }
+
+        private void SpectrumAnalyzerWindow_LocationChanged(object? sender, EventArgs e)
+        {
+            // Save window location when it changes
+            if (WindowState == FormWindowState.Normal && _settings != null)
+            {
+                SaveWindowLocation();
+            }
+        }
+
+        private void SaveWindowLocation()
+        {
+            if (_settings != null && WindowState == FormWindowState.Normal)
+            {
+                var rememberPosition = GetRememberPositionSetting();
+                if (rememberPosition)
+                {
+                    _settings.WindowLocation = Location;
+                    _logger.LogDebug("Saved window location: {Location}", Location);
+                }
+            }
+        }
+
+        private bool GetRememberPositionSetting()
+        {
+            // Check if "Remember window position" is enabled in CustomSettings
+            if (_settings?.CustomSettings?.TryGetValue("RememberPosition", out var value) == true)
+            {
+                if (value is bool boolValue)
+                    return boolValue;
+                
+                // Try to convert string to bool
+                if (value is string stringValue && bool.TryParse(stringValue, out bool parsedValue))
+                    return parsedValue;
+            }
+            
+            return false; // Default to not remembering position
+        }
+
+        private bool IsLocationOnScreen(Point location)
+        {
+            // Check if the location is within any of the available screens
+            foreach (var screen in Screen.AllScreens)
+            {
+                // Allow some tolerance for window borders
+                var bounds = screen.WorkingArea;
+                bounds.Inflate(-50, -50); // Give 50px margin
+                
+                if (bounds.Contains(location))
+                {
+                    return true;
+                }
+            }
+            
+            return false;
         }
 
 
@@ -452,6 +513,24 @@ namespace TaskbarEqualizer.Main
                         _refreshTimer.Interval = newInterval;
                         _refreshTimer.Start();
                         _logger.LogDebug("Updated refresh interval to: {Interval}ms", newInterval);
+                    }
+                }
+
+                // Restore window position if remember position is enabled and a valid location is saved
+                var rememberPosition = GetRememberPositionSetting();
+                if (rememberPosition && settings.WindowLocation != Point.Empty)
+                {
+                    var savedLocation = settings.WindowLocation;
+                    
+                    // Validate that the saved location is within screen bounds
+                    if (IsLocationOnScreen(savedLocation))
+                    {
+                        Location = savedLocation;
+                        _logger.LogDebug("Restored window location to: {Location}", savedLocation);
+                    }
+                    else
+                    {
+                        _logger.LogWarning("Saved window location {Location} is outside screen bounds, using default", savedLocation);
                     }
                 }
 

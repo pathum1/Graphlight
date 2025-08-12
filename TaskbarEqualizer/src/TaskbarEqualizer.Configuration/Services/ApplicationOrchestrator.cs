@@ -625,6 +625,14 @@ namespace TaskbarEqualizer.Configuration.Services
                 {
                     needsSpectrumWindowUpdate = true;
                     _logger.LogDebug("CustomSettings changed - updating spectrum window for potential color/style changes");
+                    
+                    // Also update taskbar overlay for CustomSettings changes since they may include color/style changes
+                    var changedVizSettings = visualizationSettings.Where(setting => e.ChangedKeys.Contains(setting));
+                    if (!changedVizSettings.Any())
+                    {
+                        // If no specific visualization settings were detected, assume color/style changes in CustomSettings
+                        _logger.LogDebug("No explicit visualization settings found, treating CustomSettings as color/style change");
+                    }
                 }
 
                 // Apply audio capture updates

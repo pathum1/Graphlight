@@ -170,6 +170,9 @@ namespace TaskbarEqualizer.Configuration.Services
                         _settings.BulkPropertyChanged += OnSettingsBulkPropertyChanged;
                         
                         _logger.LogDebug("Settings loaded from file");
+                        
+                        // Migrate legacy CustomSettings to strongly-typed properties
+                        MigrateLegacySettings();
                     }
                     else
                     {
@@ -914,6 +917,36 @@ namespace TaskbarEqualizer.Configuration.Services
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
         }
 
+        #endregion
+
+        #region Migration Methods
+        
+        /// <summary>
+        /// Migrates legacy CustomSettings entries to strongly-typed properties.
+        /// Removes obsolete entries to prevent conversion warnings.
+        /// </summary>
+        private void MigrateLegacySettings()
+        {
+            var legacyKeys = new[] { "RememberPosition" };
+            bool migrated = false;
+            
+            foreach (var key in legacyKeys)
+            {
+                if (_settings.CustomSettings.ContainsKey(key))
+                {
+                    _logger.LogDebug("Removing legacy CustomSettings entry: {Key}", key);
+                    _settings.CustomSettings.Remove(key);
+                    migrated = true;
+                }
+            }
+            
+            if (migrated)
+            {
+                _isDirty = true;
+                _logger.LogInformation("Migrated legacy CustomSettings entries to strongly-typed properties");
+            }
+        }
+        
         #endregion
 
         #region IDisposable Implementation

@@ -613,11 +613,11 @@ namespace TaskbarEqualizer.Configuration.Services
                     "SpringDamping", "ChangeThreshold", "AdaptiveQuality", "MaxFrameRate"
                 };
 
-                if (visualizationSettings.Any(setting => e.ChangedKeys.Contains(setting)))
+                var changedVizSettings = visualizationSettings.Where(setting => e.ChangedKeys.Contains(setting));
+                if (changedVizSettings.Any())
                 {
                     needsSpectrumWindowUpdate = true;
-                    var changedVizSettings = visualizationSettings.Where(setting => e.ChangedKeys.Contains(setting));
-                    _logger.LogDebug("Visualization settings changed: {Settings}", string.Join(", ", changedVizSettings));
+                    _logger.LogInformation("Visualization settings changed: {Settings}", string.Join(", ", changedVizSettings));
                 }
 
                 // Handle CustomSettings changes - these can contain color and visualization changes
@@ -627,8 +627,8 @@ namespace TaskbarEqualizer.Configuration.Services
                     _logger.LogDebug("CustomSettings changed - updating spectrum window for potential color/style changes");
                     
                     // Also update taskbar overlay for CustomSettings changes since they may include color/style changes
-                    var changedVizSettings = visualizationSettings.Where(setting => e.ChangedKeys.Contains(setting));
-                    if (!changedVizSettings.Any())
+                    var customSettingsVizChanges = visualizationSettings.Where(setting => e.ChangedKeys.Contains(setting));
+                    if (!customSettingsVizChanges.Any())
                     {
                         // If no specific visualization settings were detected, assume color/style changes in CustomSettings
                         _logger.LogDebug("No explicit visualization settings found, treating CustomSettings as color/style change");

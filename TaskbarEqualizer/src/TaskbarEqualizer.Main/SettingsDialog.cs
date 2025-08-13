@@ -653,7 +653,7 @@ namespace TaskbarEqualizer.Main
                 _startWithWindowsCheckBox.Checked = _settings.StartWithWindows;
                 _startMinimizedCheckBox.Checked = _settings.StartMinimized;
                 _showNotificationsCheckBox.Checked = _settings.ShowNotifications;
-                _rememberPositionCheckBox.Checked = _settingsManager.GetSetting("RememberPosition", false);
+                _rememberPositionCheckBox.Checked = _settings.RememberPosition;
 
                 // Visualization Tab
                 _visualizationStyleComboBox.SelectedItem = _settings.VisualizationStyle.ToString();
@@ -715,19 +715,9 @@ namespace TaskbarEqualizer.Main
 
         private void OnRememberPositionChanged(object? sender, EventArgs e)
         {
-            var value = _rememberPositionCheckBox.Checked;
-            Task.Run(async () => 
-            {
-                try 
-                {
-                    await _settingsManager.SetSettingAsync("RememberPosition", value, false);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Failed to set RememberPosition setting");
-                }
-            });
-            _logger.LogDebug("Remember position changed: {Value}", value);
+            _settings.RememberPosition = _rememberPositionCheckBox.Checked;
+            UpdateApplyButton();
+            _logger.LogDebug("Remember position changed: {Value}", _settings.RememberPosition);
         }
 
         private void OnVisualizationStyleChanged(object? sender, EventArgs e)

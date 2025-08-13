@@ -136,18 +136,8 @@ namespace TaskbarEqualizer.Main
 
         private bool GetRememberPositionSetting()
         {
-            // Check if "Remember window position" is enabled in CustomSettings
-            if (_settings?.CustomSettings?.TryGetValue("RememberPosition", out var value) == true)
-            {
-                if (value is bool boolValue)
-                    return boolValue;
-                
-                // Try to convert string to bool
-                if (value is string stringValue && bool.TryParse(stringValue, out bool parsedValue))
-                    return parsedValue;
-            }
-            
-            return false; // Default to not remembering position
+            // Use the strongly-typed RememberPosition property
+            return _settings?.RememberPosition ?? false;
         }
 
         private bool IsLocationOnScreen(Point location)
@@ -502,6 +492,11 @@ namespace TaskbarEqualizer.Main
                 // Update gain factor
                 _gainFactor = settings.GainFactor;
                 _logger.LogDebug("Updated gain factor to: {GainFactor}", _gainFactor);
+
+                // Log color and style settings
+                _logger.LogInformation("Color/Style settings: UseCustomColors={UseCustomColors}, " +
+                    "PrimaryColor={PrimaryColor}, SecondaryColor={SecondaryColor}, VisualizationStyle={VisualizationStyle}",
+                    settings.UseCustomColors, settings.CustomPrimaryColor, settings.CustomSecondaryColor, settings.VisualizationStyle);
 
                 // Update refresh timer interval
                 if (_refreshTimer != null)

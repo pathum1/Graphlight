@@ -47,6 +47,7 @@ namespace TaskbarEqualizer.Configuration
         private GradientDirection _gradientDirection = GradientDirection.Vertical;
         private float _opacity = 1.0f;
         private Point _windowLocation = Point.Empty;
+        private bool _rememberPosition = false;
         private Keys _settingsShortcut = Keys.Control | Keys.S;
         private Keys _toggleShortcut = Keys.Control | Keys.Alt | Keys.E;
         private bool _enableGlobalHotkeys = true;
@@ -404,6 +405,15 @@ namespace TaskbarEqualizer.Configuration
             }
         }
 
+        /// <summary>
+        /// Whether to remember and restore the spectrum analyzer window position.
+        /// </summary>
+        public bool RememberPosition
+        {
+            get => _rememberPosition;
+            set => SetProperty(ref _rememberPosition, value);
+        }
+
         #endregion
 
         #region Hotkey Settings
@@ -655,8 +665,7 @@ namespace TaskbarEqualizer.Configuration
                 target.DebugMode = DebugMode;
                 target.LogLevel = LogLevel;
                 target.EnableTelemetry = EnableTelemetry;
-                target.CustomSettings = new Dictionary<string, object>(CustomSettings);
-                // Set visual properties last so they trigger the final events
+                // Set visual properties before CustomSettings to ensure they appear in ChangedKeys
                 target.CustomPrimaryColor = CustomPrimaryColor;
                 target.CustomSecondaryColor = CustomSecondaryColor;
                 target.UseCustomColors = UseCustomColors;
@@ -664,7 +673,10 @@ namespace TaskbarEqualizer.Configuration
                 target.GradientDirection = GradientDirection;
                 target.Opacity = Opacity;
                 target.WindowLocation = WindowLocation;
-                target.VisualizationStyle = VisualizationStyle; // Set style last for spectrum analyzer
+                target.RememberPosition = RememberPosition;
+                target.VisualizationStyle = VisualizationStyle;
+                // Set CustomSettings last to avoid masking other property changes
+                target.CustomSettings = new Dictionary<string, object>(CustomSettings);
             }
             finally
             {

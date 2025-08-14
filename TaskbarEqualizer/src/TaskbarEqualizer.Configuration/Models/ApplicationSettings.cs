@@ -665,16 +665,17 @@ namespace TaskbarEqualizer.Configuration
                 target.DebugMode = DebugMode;
                 target.LogLevel = LogLevel;
                 target.EnableTelemetry = EnableTelemetry;
-                // Set visual properties before CustomSettings to ensure they appear in ChangedKeys
-                target.CustomPrimaryColor = CustomPrimaryColor;
-                target.CustomSecondaryColor = CustomSecondaryColor;
-                target.UseCustomColors = UseCustomColors;
+                target.WindowLocation = WindowLocation;
+                target.RememberPosition = RememberPosition;
+                // Set critical visual/color properties last to ensure they appear in ChangedKeys
+                // and override any CustomSettings changes that might mask them
+                target.VisualizationStyle = VisualizationStyle;
                 target.EnableGradient = EnableGradient;
                 target.GradientDirection = GradientDirection;
                 target.Opacity = Opacity;
-                target.WindowLocation = WindowLocation;
-                target.RememberPosition = RememberPosition;
-                target.VisualizationStyle = VisualizationStyle;
+                target.CustomPrimaryColor = CustomPrimaryColor;
+                target.CustomSecondaryColor = CustomSecondaryColor;
+                target.UseCustomColors = UseCustomColors;
                 // Set CustomSettings last to avoid masking other property changes
                 target.CustomSettings = new Dictionary<string, object>(CustomSettings);
             }

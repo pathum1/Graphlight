@@ -175,7 +175,7 @@ namespace TaskbarEqualizer.SystemTray
                 // Use reflection to access ApplicationSettings properties
                 var settingsType = settings.GetType();
 
-                // Update overlay configuration properties
+                // Create new overlay configuration instance instead of mutating existing one
                 var overlayConfig = new OverlayConfiguration
                 {
                     Enabled = _configuration.Enabled,
@@ -185,7 +185,40 @@ namespace TaskbarEqualizer.SystemTray
                     Margin = _configuration.Margin,
                     AutoHide = _configuration.AutoHide,
                     AutoHideDelay = _configuration.AutoHideDelay,
-                    RenderConfiguration = new RenderConfiguration()
+                    RenderConfiguration = new RenderConfiguration
+                    {
+                        // Copy existing values first to preserve settings not being updated
+                        IconSize = _configuration.RenderConfiguration?.IconSize ?? IconSize.Medium,
+                        Style = _configuration.RenderConfiguration?.Style ?? EqualizerStyle.Bars,
+                        TargetFrameRate = _configuration.RenderConfiguration?.TargetFrameRate ?? 60,
+                        Quality = _configuration.RenderConfiguration?.Quality ?? RenderQuality.High,
+                        AntiAliasing = _configuration.RenderConfiguration?.AntiAliasing ?? true,
+                        EnableEffects = _configuration.RenderConfiguration?.EnableEffects ?? true,
+                        AdaptiveQuality = _configuration.RenderConfiguration?.AdaptiveQuality ?? true,
+                        ChangeThreshold = _configuration.RenderConfiguration?.ChangeThreshold ?? 0.02,
+                        ColorScheme = new ColorScheme
+                        {
+                            // Copy existing color scheme values to preserve settings not being updated
+                            PrimaryColor = _configuration.RenderConfiguration?.ColorScheme?.PrimaryColor ?? Color.FromArgb(0, 120, 215),
+                            SecondaryColor = _configuration.RenderConfiguration?.ColorScheme?.SecondaryColor ?? Color.FromArgb(0, 90, 158),
+                            BackgroundColor = _configuration.RenderConfiguration?.ColorScheme?.BackgroundColor ?? Color.Transparent,
+                            BorderColor = _configuration.RenderConfiguration?.ColorScheme?.BorderColor ?? Color.FromArgb(60, 60, 60),
+                            UseGradient = _configuration.RenderConfiguration?.ColorScheme?.UseGradient ?? true,
+                            GradientDirection = _configuration.RenderConfiguration?.ColorScheme?.GradientDirection ?? GradientDirection.Vertical,
+                            Opacity = _configuration.RenderConfiguration?.ColorScheme?.Opacity ?? 1.0f
+                        },
+                        Animation = new AnimationConfiguration
+                        {
+                            // Copy existing animation values to preserve settings not being updated
+                            SmoothingFactor = _configuration.RenderConfiguration?.Animation?.SmoothingFactor ?? 0.8,
+                            AttackTime = _configuration.RenderConfiguration?.Animation?.AttackTime ?? 10.0,
+                            DecayTime = _configuration.RenderConfiguration?.Animation?.DecayTime ?? 100.0,
+                            EnableSpringPhysics = _configuration.RenderConfiguration?.Animation?.EnableSpringPhysics ?? true,
+                            SpringStiffness = _configuration.RenderConfiguration?.Animation?.SpringStiffness ?? 200.0f,
+                            SpringDamping = _configuration.RenderConfiguration?.Animation?.SpringDamping ?? 20.0f,
+                            EnableBeatEffects = _configuration.RenderConfiguration?.Animation?.EnableBeatEffects ?? true
+                        }
+                    }
                 };
 
                 // Update UpdateFrequency from UpdateInterval setting
@@ -253,10 +286,6 @@ namespace TaskbarEqualizer.SystemTray
                 var enableAnimationsProp = settingsType.GetProperty("EnableAnimations");
                 if (enableAnimationsProp?.GetValue(settings) is bool enableAnimations)
                 {
-                    // Animation is controlled by the animation configuration
-                    if (renderConfig.Animation == null)
-                        renderConfig.Animation = new AnimationConfiguration();
-                    
                     _logger.LogDebug("Animations enabled: {Enabled}", enableAnimations);
                 }
 
@@ -267,9 +296,6 @@ namespace TaskbarEqualizer.SystemTray
                     renderConfig.EnableEffects = enableEffects;
                     _logger.LogDebug("Updated effects enabled to {Enabled}", enableEffects);
                 }
-
-                // AntiAliasing (defaults to enabled)
-                renderConfig.AntiAliasing = true;
 
                 // AdaptiveQuality
                 var adaptiveQualityProp = settingsType.GetProperty("AdaptiveQuality");
@@ -287,31 +313,40 @@ namespace TaskbarEqualizer.SystemTray
                     _logger.LogDebug("Updated change threshold to {Threshold}", changeThreshold);
                 }
 
-                // Update color scheme
-                if (renderConfig.ColorScheme == null)
-                    renderConfig.ColorScheme = new ColorScheme();
-
+                // Update color scheme - ensure we handle custom colors properly
                 var colorScheme = renderConfig.ColorScheme;
 
-                // UseCustomColors and custom colors
+                // Check UseCustomColors property first
                 var useCustomColorsProp = settingsType.GetProperty("UseCustomColors");
                 var useCustomColors = useCustomColorsProp?.GetValue(settings) is bool customColors && customColors;
 
+                _logger.LogDebug("UseCustomColors setting: {UseCustomColors}", useCustomColors);
+
                 if (useCustomColors)
                 {
+                    // Apply custom colors when UseCustomColors is true
                     var primaryColorProp = settingsType.GetProperty("CustomPrimaryColor");
                     if (primaryColorProp?.GetValue(settings) is System.Drawing.Color primaryColor)
                     {
                         colorScheme.PrimaryColor = primaryColor;
-                        _logger.LogDebug("Updated primary color to {Color}", primaryColor);
+                        _logger.LogDebug("Applied custom primary color: {Color} (A={A}, R={R}, G={G}, B={B})", 
+                            primaryColor.Name, primaryColor.A, primaryColor.R, primaryColor.G, primaryColor.B);
                     }
 
                     var secondaryColorProp = settingsType.GetProperty("CustomSecondaryColor");
                     if (secondaryColorProp?.GetValue(settings) is System.Drawing.Color secondaryColor)
                     {
                         colorScheme.SecondaryColor = secondaryColor;
-                        _logger.LogDebug("Updated secondary color to {Color}", secondaryColor);
+                        _logger.LogDebug("Applied custom secondary color: {Color} (A={A}, R={R}, G={G}, B={B})", 
+                            secondaryColor.Name, secondaryColor.A, secondaryColor.R, secondaryColor.G, secondaryColor.B);
                     }
+                }
+                else
+                {
+                    // Use default theme colors when UseCustomColors is false
+                    colorScheme.PrimaryColor = Color.FromArgb(0, 120, 215); // Windows 11 accent blue
+                    colorScheme.SecondaryColor = Color.FromArgb(0, 90, 158);
+                    _logger.LogDebug("Using default theme colors - UseCustomColors is false");
                 }
 
                 // EnableGradient

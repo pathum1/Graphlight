@@ -183,6 +183,49 @@ namespace TaskbarEqualizer.SystemTray.Interfaces
         /// Minimum change threshold to trigger re-rendering (0.0-1.0).
         /// </summary>
         public double ChangeThreshold { get; set; } = 0.02;
+
+        /// <summary>
+        /// Gets the hash code for this RenderConfiguration, including all properties that affect rendering.
+        /// </summary>
+        public override int GetHashCode()
+        {
+            // Use HashCode.Combine to ensure all rendering-relevant properties are included
+            var hash1 = HashCode.Combine(
+                IconSize,
+                Style,
+                ColorScheme?.GetHashCode() ?? 0,
+                TargetFrameRate,
+                Quality,
+                AntiAliasing,
+                EnableEffects
+            );
+            
+            var hash2 = HashCode.Combine(
+                Animation?.GetHashCode() ?? 0,
+                AdaptiveQuality,
+                ChangeThreshold.GetHashCode()
+            );
+            
+            return HashCode.Combine(hash1, hash2);
+        }
+
+        /// <summary>
+        /// Determines whether the specified RenderConfiguration is equal to this instance.
+        /// </summary>
+        public override bool Equals(object? obj)
+        {
+            if (obj is not RenderConfiguration other) return false;
+            return IconSize == other.IconSize &&
+                   Style == other.Style &&
+                   (ColorScheme?.Equals(other.ColorScheme) ?? other.ColorScheme == null) &&
+                   TargetFrameRate == other.TargetFrameRate &&
+                   Quality == other.Quality &&
+                   AntiAliasing == other.AntiAliasing &&
+                   EnableEffects == other.EnableEffects &&
+                   (Animation?.Equals(other.Animation) ?? other.Animation == null) &&
+                   AdaptiveQuality == other.AdaptiveQuality &&
+                   Math.Abs(ChangeThreshold - other.ChangeThreshold) < 0.001;
+        }
     }
 
     /// <summary>
@@ -307,6 +350,37 @@ namespace TaskbarEqualizer.SystemTray.Interfaces
         /// Opacity level for the entire visualization (0.0-1.0).
         /// </summary>
         public float Opacity { get; set; } = 1.0f;
+
+        /// <summary>
+        /// Gets the hash code for this ColorScheme, including all color properties.
+        /// </summary>
+        public override int GetHashCode()
+        {
+            return HashCode.Combine(
+                PrimaryColor.ToArgb(),
+                SecondaryColor.ToArgb(),
+                BackgroundColor.ToArgb(),
+                BorderColor.ToArgb(),
+                UseGradient,
+                GradientDirection,
+                Opacity.GetHashCode()
+            );
+        }
+
+        /// <summary>
+        /// Determines whether the specified ColorScheme is equal to this instance.
+        /// </summary>
+        public override bool Equals(object? obj)
+        {
+            if (obj is not ColorScheme other) return false;
+            return PrimaryColor.ToArgb() == other.PrimaryColor.ToArgb() &&
+                   SecondaryColor.ToArgb() == other.SecondaryColor.ToArgb() &&
+                   BackgroundColor.ToArgb() == other.BackgroundColor.ToArgb() &&
+                   BorderColor.ToArgb() == other.BorderColor.ToArgb() &&
+                   UseGradient == other.UseGradient &&
+                   GradientDirection == other.GradientDirection &&
+                   Math.Abs(Opacity - other.Opacity) < 0.001f;
+        }
     }
 
     /// <summary>
@@ -359,6 +433,37 @@ namespace TaskbarEqualizer.SystemTray.Interfaces
         /// Whether to enable beat detection effects.
         /// </summary>
         public bool EnableBeatEffects { get; set; } = true;
+
+        /// <summary>
+        /// Gets the hash code for this AnimationConfiguration.
+        /// </summary>
+        public override int GetHashCode()
+        {
+            return HashCode.Combine(
+                SmoothingFactor.GetHashCode(),
+                AttackTime.GetHashCode(),
+                DecayTime.GetHashCode(),
+                EnableSpringPhysics,
+                SpringStiffness.GetHashCode(),
+                SpringDamping.GetHashCode(),
+                EnableBeatEffects
+            );
+        }
+
+        /// <summary>
+        /// Determines whether the specified AnimationConfiguration is equal to this instance.
+        /// </summary>
+        public override bool Equals(object? obj)
+        {
+            if (obj is not AnimationConfiguration other) return false;
+            return Math.Abs(SmoothingFactor - other.SmoothingFactor) < 0.001 &&
+                   Math.Abs(AttackTime - other.AttackTime) < 0.001 &&
+                   Math.Abs(DecayTime - other.DecayTime) < 0.001 &&
+                   EnableSpringPhysics == other.EnableSpringPhysics &&
+                   Math.Abs(SpringStiffness - other.SpringStiffness) < 0.001f &&
+                   Math.Abs(SpringDamping - other.SpringDamping) < 0.001f &&
+                   EnableBeatEffects == other.EnableBeatEffects;
+        }
     }
 
     /// <summary>

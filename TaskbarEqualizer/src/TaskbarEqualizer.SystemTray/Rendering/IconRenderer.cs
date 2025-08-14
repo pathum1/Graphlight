@@ -211,13 +211,17 @@ namespace TaskbarEqualizer.SystemTray.Rendering
             if (configuration == null)
                 throw new ArgumentNullException(nameof(configuration));
 
-            _logger.LogInformation("Updating IconRenderer configuration");
+            _logger.LogInformation("Updating IconRenderer configuration - Colors: Primary={Primary}, Secondary={Secondary}, UseCustomColors implied by config", 
+                configuration.ColorScheme?.PrimaryColor, configuration.ColorScheme?.SecondaryColor);
 
             try
             {
                 lock (_renderLock)
                 {
                     var needsSpectrumResize = configuration.IconSize != _configuration.IconSize;
+                    var oldConfigHash = _configuration.GetHashCode();
+                    var newConfigHash = configuration.GetHashCode();
+                    var configChanged = oldConfigHash != newConfigHash;
                     
                     _configuration = configuration;
                     
@@ -232,8 +236,13 @@ namespace TaskbarEqualizer.SystemTray.Rendering
                         _targetSpectrum = new double[spectrumSize];
                     }
                     
-                    // Clear cache as configuration changed
-                    _renderCache.Clear();
+                    // Clear cache when configuration changes (especially important for color changes)
+                    if (configChanged)
+                    {
+                        _logger.LogDebug("Configuration hash changed from {OldHash} to {NewHash} - clearing render cache", 
+                            oldConfigHash, newConfigHash);
+                        _renderCache.Clear();
+                    }
                 }
 
                 _logger.LogDebug("IconRenderer configuration updated successfully");
@@ -444,7 +453,11 @@ namespace TaskbarEqualizer.SystemTray.Rendering
 
         private void RenderBarsStyle(Graphics graphics, double[] spectrum, RenderConfiguration config, int iconSize)
         {
-            var colorScheme = _currentTheme?.DarkMode ?? config.ColorScheme;
+            // Use config color scheme directly - don't override with theme if custom colors are specified
+            var colorScheme = config.ColorScheme;
+            _logger.LogTrace("Using color scheme: Primary={Primary}, Secondary={Secondary}", 
+                colorScheme.PrimaryColor, colorScheme.SecondaryColor);
+            
             var barCount = Math.Min(spectrum.Length, GetOptimalBarCount(iconSize));
             
             var barWidth = (float)iconSize / barCount * 0.8f; // 80% width with spacing
@@ -479,7 +492,8 @@ namespace TaskbarEqualizer.SystemTray.Rendering
 
         private void RenderDotsStyle(Graphics graphics, double[] spectrum, RenderConfiguration config, int iconSize)
         {
-            var colorScheme = _currentTheme?.DarkMode ?? config.ColorScheme;
+            // Use config color scheme directly - don't override with theme
+            var colorScheme = config.ColorScheme;
             var dotCount = Math.Min(spectrum.Length, GetOptimalBarCount(iconSize));
             
             var dotSize = (float)iconSize / dotCount * 0.6f;
@@ -502,7 +516,8 @@ namespace TaskbarEqualizer.SystemTray.Rendering
 
         private void RenderWaveformStyle(Graphics graphics, double[] spectrum, RenderConfiguration config, int iconSize)
         {
-            var colorScheme = _currentTheme?.DarkMode ?? config.ColorScheme;
+            // Use config color scheme directly - don't override with theme
+            var colorScheme = config.ColorScheme;
             
             if (spectrum.Length < 2) return;
             
@@ -536,7 +551,8 @@ namespace TaskbarEqualizer.SystemTray.Rendering
 
         private void RenderLinesStyle(Graphics graphics, double[] spectrum, RenderConfiguration config, int iconSize)
         {
-            var colorScheme = _currentTheme?.DarkMode ?? config.ColorScheme;
+            // Use config color scheme directly - don't override with theme
+            var colorScheme = config.ColorScheme;
             var lineCount = Math.Min(spectrum.Length, GetOptimalBarCount(iconSize));
             
             var lineSpacing = (float)iconSize / lineCount;
@@ -625,13 +641,23 @@ namespace TaskbarEqualizer.SystemTray.Rendering
 
         private string GenerateCacheKey(double[] spectrum, RenderConfiguration config)
         {
-            // Simple hash based on spectrum values and config
-            var hash = config.GetHashCode();
+            // Use improved config hash that includes color properties
+            var configHash = config.GetHashCode();
+            
+            // Generate spectrum hash with better precision for color changes
+            var spectrumHash = 0;
             for (int i = 0; i < Math.Min(spectrum.Length, 16); i++) // Limit for performance
             {
-                hash = HashCode.Combine(hash, (int)(spectrum[i] * 1000));
+                spectrumHash = HashCode.Combine(spectrumHash, (int)(spectrum[i] * 1000));
             }
-            return hash.ToString();
+            
+            // Combine config hash (which now includes colors) with spectrum data
+            var finalHash = HashCode.Combine(configHash, spectrumHash);
+            
+            _logger.LogTrace("Generated cache key {CacheKey} for config hash {ConfigHash} and spectrum hash {SpectrumHash}", 
+                finalHash, configHash, spectrumHash);
+                
+            return finalHash.ToString();
         }
 
         private bool IsSpectrumSimilar(double[] spectrum1, double[] spectrum2, double threshold)

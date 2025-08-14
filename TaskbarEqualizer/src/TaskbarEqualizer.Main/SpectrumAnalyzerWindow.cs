@@ -252,6 +252,10 @@ namespace TaskbarEqualizer.Main
 
             // Check visualization style
             var visualizationStyle = _settings?.VisualizationStyle ?? EqualizerStyle.Bars;
+            
+            // Debug logging to verify colors and styles are being applied
+            _logger.LogDebug("Drawing with style: {Style}, UseCustomColors: {UseCustom}, Primary: {Primary}, Secondary: {Secondary}",
+                visualizationStyle, _settings?.UseCustomColors, primaryColor, secondaryColor);
 
             switch (visualizationStyle)
             {
@@ -263,6 +267,12 @@ namespace TaskbarEqualizer.Main
                     break;
                 case EqualizerStyle.Waveform:
                     DrawWaveform(g, clientRect, maxHeight, primaryColor, secondaryColor);
+                    break;
+                case EqualizerStyle.Spectrum:
+                    DrawSpectrumStyle(g, clientRect, barCount, barWidth, maxHeight, primaryColor, secondaryColor);
+                    break;
+                case EqualizerStyle.Lines:
+                    DrawLines(g, clientRect, barCount, barWidth, maxHeight, primaryColor, secondaryColor);
                     break;
                 default:
                     DrawBars(g, clientRect, barCount, barWidth, maxHeight, primaryColor, secondaryColor);
@@ -458,6 +468,95 @@ namespace TaskbarEqualizer.Main
             g.DrawString(infoText, font, brush, x, y);
         }
 
+        private void DrawSpectrumStyle(Graphics g, Rectangle clientRect, int barCount, float barWidth, int maxHeight, Color primaryColor, Color secondaryColor)
+        {
+            // Spectrum style: Similar to bars but with more continuous fill and glow effects
+            Brush brush;
+            if (_settings?.EnableGradient == true)
+            {
+                var gradientMode = _settings.GradientDirection switch
+                {
+                    GradientDirection.Horizontal => LinearGradientMode.Horizontal,
+                    GradientDirection.Diagonal => LinearGradientMode.ForwardDiagonal,
+                    _ => LinearGradientMode.Vertical
+                };
+                
+                brush = new LinearGradientBrush(
+                    new Rectangle(0, 0, clientRect.Width, maxHeight),
+                    primaryColor, secondaryColor, gradientMode);
+            }
+            else
+            {
+                brush = new SolidBrush(primaryColor);
+            }
+
+            using (brush)
+            {
+                // Draw spectrum bars with no gaps for continuous look
+                for (int i = 0; i < barCount; i++)
+                {
+                    var level = Math.Max(0, Math.Min(1, _smoothedSpectrum[i] * (float)_gainFactor));
+                    var barHeight = (int)(level * maxHeight);
+                    
+                    if (barHeight > 0)
+                    {
+                        var x = i * barWidth;
+                        var y = clientRect.Height - 40 - barHeight; // 40px from bottom for info
+                        var width = barWidth; // No gaps between bars
+                        
+                        g.FillRectangle(brush, x, y, width, barHeight);
+                        
+                        // Add glow effect if effects are enabled
+                        if (_settings?.EnableEffects == true)
+                        {
+                            using var glowBrush = new SolidBrush(Color.FromArgb(64, primaryColor));
+                            g.FillRectangle(glowBrush, x - 1, y - 1, width + 2, barHeight + 2);
+                        }
+                    }
+                }
+            }
+        }
+
+        private void DrawLines(Graphics g, Rectangle clientRect, int barCount, float barWidth, int maxHeight, Color primaryColor, Color secondaryColor)
+        {
+            // Lines style: Thin vertical lines instead of bars
+            var penWidth = Math.Max(1, barWidth * 0.3f); // Thin lines
+            
+            for (int i = 0; i < barCount; i++)
+            {
+                var level = Math.Max(0, Math.Min(1, _smoothedSpectrum[i] * (float)_gainFactor));
+                var lineHeight = (int)(level * maxHeight);
+                
+                if (lineHeight > 0)
+                {
+                    Color lineColor;
+                    if (_settings?.EnableGradient == true)
+                    {
+                        var ratio = (float)level;
+                        lineColor = InterpolateColor(primaryColor, secondaryColor, ratio);
+                    }
+                    else
+                    {
+                        lineColor = primaryColor;
+                    }
+                    
+                    using var pen = new Pen(lineColor, penWidth);
+                    var x = i * barWidth + barWidth / 2; // Center the line
+                    var y1 = clientRect.Height - 40;
+                    var y2 = y1 - lineHeight;
+                    
+                    g.DrawLine(pen, x, y1, x, y2);
+                    
+                    // Add dot at the top of each line for visual appeal
+                    if (_settings?.EnableEffects == true && lineHeight > 5)
+                    {
+                        using var dotBrush = new SolidBrush(lineColor);
+                        g.FillEllipse(dotBrush, x - 2, y2 - 2, 4, 4);
+                    }
+                }
+            }
+        }
+
         /// <summary>
         /// Updates the spectrum window with new settings.
         /// </summary>
@@ -530,7 +629,18 @@ namespace TaskbarEqualizer.Main
                 }
 
                 // Force a redraw with new settings
-                Invalidate();
+                if (InvokeRequired)
+                {
+                    Invoke(new Action(() => {
+                        Invalidate();  // Force repaint
+                        Update();      // Process the paint message immediately
+                    }));
+                }
+                else
+                {
+                    Invalidate();  // Force repaint
+                    Update();      // Process the paint message immediately
+                }
                 
                 _logger.LogInformation("Spectrum window settings updated successfully");
             }

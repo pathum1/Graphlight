@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Runtime.InteropServices;
@@ -437,10 +438,24 @@ namespace TaskbarEqualizer.SystemTray
                     _logger.LogDebug("Updated spring damping to {Damping}", springDamping);
                 }
 
-                // Apply the updated configuration
-                await UpdateConfigurationAsync(overlayConfig, cancellationToken);
-
-                _logger.LogInformation("TaskbarOverlayManager settings updated successfully");
+                // CRITICAL FIX: Apply configuration and force immediate visual refresh
+                _configuration = overlayConfig;
+                
+                // If overlay is currently active, force immediate update
+                if (_status == OverlayStatus.Active && _overlayWindow != null)
+                {
+                    // Update the overlay window's internal configuration
+                    await UpdateOverlayWindowConfigurationAsync();
+                    
+                    // Force immediate visual refresh of the spectrum display
+                    ForceOverlayRefresh();
+                    
+                    _logger.LogInformation("Taskbar spectrum settings updated and immediately refreshed");
+                }
+                else
+                {
+                    _logger.LogInformation("Taskbar spectrum settings updated (will apply when overlay becomes active)");
+                }
             }
             catch (Exception ex)
             {
@@ -572,6 +587,80 @@ namespace TaskbarEqualizer.SystemTray
             var y = taskbarBounds.Top + (taskbarBounds.Height - height) / 2;
 
             return new Rectangle(x, y, width, height);
+        }
+
+        /// <summary>
+        /// Forces immediate visual refresh of the taskbar overlay window.
+        /// This ensures that configuration changes are immediately visible to the user.
+        /// </summary>
+        private void ForceOverlayRefresh()
+        {
+            if (_overlayWindow == null || _disposed)
+                return;
+
+            try
+            {
+                // Force the overlay window to repaint immediately with proper thread safety
+                if (_overlayWindow.InvokeRequired)
+                {
+                    _overlayWindow.Invoke(new Action(() =>
+                    {
+                        _overlayWindow.Invalidate(); // Mark entire window as needing repaint
+                        _overlayWindow.Update();     // Force immediate repaint without waiting for message queue
+                    }));
+                }
+                else
+                {
+                    _overlayWindow.Invalidate(); // Mark entire window as needing repaint
+                    _overlayWindow.Update();     // Force immediate repaint without waiting for message queue
+                }
+                
+                _logger.LogDebug("Forced immediate taskbar spectrum refresh");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to force overlay refresh");
+            }
+        }
+
+        /// <summary>
+        /// Updates the overlay window's internal configuration with thread safety.
+        /// This ensures the window uses the latest settings for rendering operations.
+        /// </summary>
+        private async Task UpdateOverlayWindowConfigurationAsync()
+        {
+            if (_overlayWindow == null || _disposed)
+                return;
+
+            try
+            {
+                // Update the overlay window's internal configuration using reflection
+                var windowType = _overlayWindow.GetType();
+                var updateConfigMethod = windowType.GetMethod("UpdateConfiguration");
+                
+                if (updateConfigMethod != null)
+                {
+                    // Ensure we're on the UI thread for window operations
+                    if (_overlayWindow.InvokeRequired)
+                    {
+                        await Task.Run(() =>
+                        {
+                            _overlayWindow.Invoke(new Action(() => 
+                                updateConfigMethod.Invoke(_overlayWindow, new object[] { _configuration })));
+                        });
+                    }
+                    else
+                    {
+                        updateConfigMethod.Invoke(_overlayWindow, new object[] { _configuration });
+                    }
+                }
+                
+                _logger.LogDebug("Updated overlay window configuration");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to update overlay window configuration");
+            }
         }
 
         private void ChangeStatus(OverlayStatus newStatus, string reason)
@@ -840,41 +929,62 @@ namespace TaskbarEqualizer.SystemTray
             var barWidth = (float)availableWidth / barCount;
             var maxHeight = size.Height - 8; // Leave space for drag area
             
-            // Border made transparent - functionality remains
-            // using (var borderPen = new Pen(Color.FromArgb(0, 255, 255, 255), 1))
-            // {
-            //     graphics.DrawRectangle(borderPen, 0, 0, size.Width - 1, size.Height - 1);
-            // }
-            
-            // Drag area made transparent - dragging still works via mouse events
-            // using (var dragBrush = new SolidBrush(Color.FromArgb(0, 255, 255, 255)))
-            // {
-            //     graphics.FillRectangle(dragBrush, 0, 0, size.Width, 4);
-            // }
-
             DrawResizeIndicators(graphics, size, 8); // Show subtle resize grip
 
-            // Create gradient brush from green to red
-            using var gradientBrush = new LinearGradientBrush(
-                new Rectangle(2, 4, availableWidth, maxHeight),
-                Color.FromArgb(0, 255, 100),    // Green at bottom
-                Color.FromArgb(255, 100, 0),    // Red at top
-                LinearGradientMode.Vertical);
-
-            // Draw bars with proper scaling
-            for (int i = 0; i < barCount; i++)
+            // CRITICAL FIX: Use configuration colors instead of hardcoded values
+            var colorScheme = _configuration.RenderConfiguration?.ColorScheme;
+            Color primaryColor, secondaryColor;
+            
+            // Check if colors have been set to non-default values (indicating custom colors are being used)
+            var defaultPrimary = Color.FromArgb(0, 120, 215);  // Windows 11 accent blue
+            var defaultSecondary = Color.FromArgb(0, 90, 158); // Darker blue
+            
+            if (colorScheme != null && 
+                colorScheme.PrimaryColor != Color.Empty && 
+                colorScheme.SecondaryColor != Color.Empty &&
+                (colorScheme.PrimaryColor != defaultPrimary || colorScheme.SecondaryColor != defaultSecondary))
             {
-                var level = Math.Max(0, Math.Min(1, _smoothedSpectrum[i]));
-                var barHeight = Math.Max(0, (int)(level * maxHeight));
-                var x = 2 + i * barWidth; // Start at 2px margin
-                var y = size.Height - barHeight - 2;
-                var width = Math.Max(1, barWidth - 0.5f); // Small gap between bars
+                // Use colors from configuration (these are the custom colors from settings)
+                primaryColor = colorScheme.PrimaryColor;
+                secondaryColor = colorScheme.SecondaryColor;
+                _logger.LogDebug("TASKBAR OVERLAY: Using configured colors - Primary: {Primary}, Secondary: {Secondary}", 
+                    primaryColor, secondaryColor);
+            }
+            else
+            {
+                // Use default blue theme colors (Windows 11 style)
+                primaryColor = defaultPrimary;
+                secondaryColor = defaultSecondary;
+                _logger.LogDebug("TASKBAR OVERLAY: Using default colors - Primary: {Primary}, Secondary: {Secondary}", 
+                    primaryColor, secondaryColor);
+            }
 
-                // Draw main bar
-                if (barHeight > 0)
-                {
-                    graphics.FillRectangle(gradientBrush, x, y, width, barHeight);
-                }
+            // Get visualization style from configuration
+            var visualizationStyle = _configuration.RenderConfiguration?.Style ?? EqualizerStyle.Bars;
+            
+            _logger.LogDebug("TASKBAR OVERLAY: Rendering with style: {Style}", visualizationStyle);
+
+            // Render based on style
+            switch (visualizationStyle)
+            {
+                case EqualizerStyle.Bars:
+                    RenderBarsStyle(graphics, size, barCount, barWidth, maxHeight, primaryColor, secondaryColor, colorScheme);
+                    break;
+                case EqualizerStyle.Dots:
+                    RenderDotsStyle(graphics, size, barCount, barWidth, maxHeight, primaryColor, secondaryColor, colorScheme);
+                    break;
+                case EqualizerStyle.Waveform:
+                    RenderWaveformStyle(graphics, size, maxHeight, primaryColor, secondaryColor, colorScheme);
+                    break;
+                case EqualizerStyle.Spectrum:
+                    RenderSpectrumStyle(graphics, size, barCount, barWidth, maxHeight, primaryColor, secondaryColor, colorScheme);
+                    break;
+                case EqualizerStyle.Lines:
+                    RenderLinesStyle(graphics, size, barCount, barWidth, maxHeight, primaryColor, secondaryColor, colorScheme);
+                    break;
+                default:
+                    RenderBarsStyle(graphics, size, barCount, barWidth, maxHeight, primaryColor, secondaryColor, colorScheme);
+                    break;
             }
             
             // Small visible drag handle for better UX
@@ -905,6 +1015,230 @@ namespace TaskbarEqualizer.SystemTray
                     graphics.DrawLine(pen, x + 6, y + cornerSize - 1, x + cornerSize - 1, y + 6);
                 }
             }
+        }
+
+        private void RenderBarsStyle(Graphics graphics, Size size, int barCount, float barWidth, int maxHeight, Color primaryColor, Color secondaryColor, ColorScheme? colorScheme)
+        {
+            // Create brush based on gradient settings
+            Brush barBrush;
+            if (colorScheme?.UseGradient == true)
+            {
+                // Create gradient brush with configured direction
+                var gradientDirection = colorScheme.GradientDirection switch
+                {
+                    GradientDirection.Horizontal => LinearGradientMode.Horizontal,
+                    GradientDirection.Diagonal => LinearGradientMode.BackwardDiagonal,
+                    _ => LinearGradientMode.Vertical
+                };
+                
+                var availableWidth = size.Width - 4;
+                barBrush = new LinearGradientBrush(
+                    new Rectangle(2, 4, availableWidth, maxHeight),
+                    primaryColor,
+                    secondaryColor,
+                    gradientDirection);
+            }
+            else
+            {
+                // Use solid color (primary color only)
+                barBrush = new SolidBrush(primaryColor);
+            }
+
+            using (barBrush)
+            {
+                // Draw bars with proper scaling
+                for (int i = 0; i < barCount; i++)
+                {
+                    var level = Math.Max(0, Math.Min(1, _smoothedSpectrum[i]));
+                    var barHeight = Math.Max(0, (int)(level * maxHeight));
+                    var x = 2 + i * barWidth; // Start at 2px margin
+                    var y = size.Height - barHeight - 2;
+                    var width = Math.Max(1, barWidth - 0.5f); // Small gap between bars
+
+                    // Draw main bar
+                    if (barHeight > 0)
+                    {
+                        graphics.FillRectangle(barBrush, x, y, width, barHeight);
+                    }
+                }
+            }
+        }
+
+        private void RenderDotsStyle(Graphics graphics, Size size, int barCount, float barWidth, int maxHeight, Color primaryColor, Color secondaryColor, ColorScheme? colorScheme)
+        {
+            var dotSize = Math.Max(2, Math.Min(6, barWidth * 0.6f)); // Dot size based on available width
+            
+            for (int i = 0; i < barCount; i++)
+            {
+                var level = Math.Max(0, Math.Min(1, _smoothedSpectrum[i]));
+                var numDots = (int)(level * (maxHeight / (dotSize + 2))); // Number of dots based on level
+                
+                var x = 2 + i * barWidth + (barWidth - dotSize) / 2; // Center dot in bar space
+                
+                for (int d = 0; d < numDots; d++)
+                {
+                    var y = size.Height - 2 - (d * (dotSize + 2)) - dotSize;
+                    
+                    // Color interpolation for gradient effect
+                    Color dotColor;
+                    if (colorScheme?.UseGradient == true)
+                    {
+                        var ratio = (float)d / Math.Max(1, numDots - 1);
+                        dotColor = InterpolateColor(primaryColor, secondaryColor, ratio);
+                    }
+                    else
+                    {
+                        dotColor = primaryColor;
+                    }
+                    
+                    using var brush = new SolidBrush(dotColor);
+                    graphics.FillEllipse(brush, x, y, dotSize, dotSize);
+                }
+            }
+        }
+
+        private void RenderWaveformStyle(Graphics graphics, Size size, int maxHeight, Color primaryColor, Color secondaryColor, ColorScheme? colorScheme)
+        {
+            if (_smoothedSpectrum.Length < 2) return;
+
+            var points = new List<PointF>();
+            var barCount = _smoothedSpectrum.Length;
+            var stepX = (float)(size.Width - 4) / (barCount - 1);
+
+            // Create waveform points
+            for (int i = 0; i < barCount; i++)
+            {
+                var level = Math.Max(0, Math.Min(1, _smoothedSpectrum[i]));
+                var x = 2 + i * stepX;
+                var y = size.Height - 2 - (level * maxHeight); // From bottom
+                points.Add(new PointF(x, y));
+            }
+
+            // Draw the waveform
+            if (points.Count >= 2)
+            {
+                var penWidth = Math.Max(1, size.Width / 200f); // Adaptive pen width
+                using var pen = new Pen(primaryColor, penWidth);
+                
+                // Smooth curve if we have enough points
+                if (points.Count >= 3)
+                {
+                    graphics.DrawCurve(pen, points.ToArray());
+                }
+                else
+                {
+                    graphics.DrawLines(pen, points.ToArray());
+                }
+
+                // Optional: fill under the curve
+                if (colorScheme?.UseGradient == true)
+                {
+                    // Add baseline points for filling
+                    var fillPoints = new List<PointF>(points);
+                    fillPoints.Add(new PointF(size.Width - 2, size.Height - 2));
+                    fillPoints.Add(new PointF(2, size.Height - 2));
+
+                    using var fillBrush = new SolidBrush(Color.FromArgb(64, primaryColor)); // Semi-transparent
+                    graphics.FillPolygon(fillBrush, fillPoints.ToArray());
+                }
+            }
+        }
+
+        private void RenderSpectrumStyle(Graphics graphics, Size size, int barCount, float barWidth, int maxHeight, Color primaryColor, Color secondaryColor, ColorScheme? colorScheme)
+        {
+            // Spectrum style: Similar to bars but with no gaps for continuous look
+            Brush barBrush;
+            if (colorScheme?.UseGradient == true)
+            {
+                var gradientDirection = colorScheme.GradientDirection switch
+                {
+                    GradientDirection.Horizontal => LinearGradientMode.Horizontal,
+                    GradientDirection.Diagonal => LinearGradientMode.BackwardDiagonal,
+                    _ => LinearGradientMode.Vertical
+                };
+                
+                var availableWidth = size.Width - 4;
+                barBrush = new LinearGradientBrush(
+                    new Rectangle(2, 4, availableWidth, maxHeight),
+                    primaryColor,
+                    secondaryColor,
+                    gradientDirection);
+            }
+            else
+            {
+                barBrush = new SolidBrush(primaryColor);
+            }
+
+            using (barBrush)
+            {
+                // Draw spectrum bars with no gaps for continuous look
+                for (int i = 0; i < barCount; i++)
+                {
+                    var level = Math.Max(0, Math.Min(1, _smoothedSpectrum[i]));
+                    var barHeight = Math.Max(0, (int)(level * maxHeight));
+                    
+                    if (barHeight > 0)
+                    {
+                        var x = 2 + i * barWidth;
+                        var y = size.Height - barHeight - 2;
+                        var width = barWidth; // No gaps between bars
+                        
+                        graphics.FillRectangle(barBrush, x, y, width, barHeight);
+                    }
+                }
+            }
+        }
+
+        private void RenderLinesStyle(Graphics graphics, Size size, int barCount, float barWidth, int maxHeight, Color primaryColor, Color secondaryColor, ColorScheme? colorScheme)
+        {
+            // Lines style: Thin vertical lines instead of bars
+            var penWidth = Math.Max(1, barWidth * 0.3f); // Thin lines
+            
+            for (int i = 0; i < barCount; i++)
+            {
+                var level = Math.Max(0, Math.Min(1, _smoothedSpectrum[i]));
+                var lineHeight = (int)(level * maxHeight);
+                
+                if (lineHeight > 0)
+                {
+                    Color lineColor;
+                    if (colorScheme?.UseGradient == true)
+                    {
+                        var ratio = (float)level;
+                        lineColor = InterpolateColor(primaryColor, secondaryColor, ratio);
+                    }
+                    else
+                    {
+                        lineColor = primaryColor;
+                    }
+                    
+                    using var pen = new Pen(lineColor, penWidth);
+                    var x = 2 + i * barWidth + barWidth / 2; // Center the line
+                    var y1 = size.Height - 2;
+                    var y2 = y1 - lineHeight;
+                    
+                    graphics.DrawLine(pen, x, y1, x, y2);
+                    
+                    // Add dot at the top of each line for visual appeal (if space allows)
+                    if (lineHeight > 5)
+                    {
+                        using var dotBrush = new SolidBrush(lineColor);
+                        graphics.FillEllipse(dotBrush, x - 1, y2 - 1, 2, 2);
+                    }
+                }
+            }
+        }
+
+        private static Color InterpolateColor(Color start, Color end, float ratio)
+        {
+            ratio = Math.Max(0, Math.Min(1, ratio));
+            
+            var r = (int)(start.R + (end.R - start.R) * ratio);
+            var g = (int)(start.G + (end.G - start.G) * ratio);
+            var b = (int)(start.B + (end.B - start.B) * ratio);
+            var a = (int)(start.A + (end.A - start.A) * ratio);
+            
+            return Color.FromArgb(a, r, g, b);
         }
 
         public ValueTask DisposeAsync()
@@ -1177,6 +1511,43 @@ namespace TaskbarEqualizer.SystemTray
             }
             
             return base.ProcessCmdKey(ref msg, keyData);
+        }
+
+        /// <summary>
+        /// Updates the overlay window's configuration with new settings.
+        /// This method is called by the TaskbarOverlayManager when settings change.
+        /// </summary>
+        /// <param name="configuration">New overlay configuration with updated colors and styles</param>
+        public void UpdateConfiguration(OverlayConfiguration configuration)
+        {
+            try
+            {
+                _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
+                _logger.LogInformation("TASKBAR OVERLAY: Configuration updated - UseGradient: {UseGradient}, Primary: {Primary}, Secondary: {Secondary}", 
+                    _configuration.RenderConfiguration?.ColorScheme?.UseGradient,
+                    _configuration.RenderConfiguration?.ColorScheme?.PrimaryColor,
+                    _configuration.RenderConfiguration?.ColorScheme?.SecondaryColor);
+                
+                // Force immediate repaint to show new settings
+                if (InvokeRequired)
+                {
+                    Invoke(new Action(() => {
+                        Invalidate();
+                        Update();
+                    }));
+                }
+                else
+                {
+                    Invalidate();
+                    Update();
+                }
+                
+                _logger.LogDebug("TASKBAR OVERLAY: Forced immediate repaint with new configuration");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to update overlay window configuration");
+            }
         }
         
         protected override CreateParams CreateParams

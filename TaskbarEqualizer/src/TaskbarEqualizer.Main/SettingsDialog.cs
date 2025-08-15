@@ -1048,53 +1048,35 @@ namespace TaskbarEqualizer.Main
             base.OnFormClosing(e);
         }
 
+        /// <summary>
+        /// Synchronous version of settings application for use during dialog close operations.
+        /// Uses the same individual property setting approach to ensure event propagation.
+        /// </summary>
         private void ApplySettingsSync()
         {
-            if (_isApplyingSettings)
-            {
-                _logger.LogDebug("Settings application already in progress, skipping");
-                return;
-            }
-
             try
             {
-                _isApplyingSettings = true;
-
-                _logger.LogDebug("Applying settings changes to live settings instance");
-
-                // Copy the dialog settings to the actual settings instance using bulk update to prevent event flooding
-                // BUT enable events so that SettingsChanged gets fired to notify ApplicationOrchestrator
-                _logger.LogDebug("Copying settings using bulk update WITH events to ensure UI updates");
-                _settings.CopyTo(_settingsManager.Settings, suppressEvents: false);
-
-                // Explicitly mark settings as dirty since bulk update might not trigger it immediately
-                _settingsManager.MarkAsDirty();
-
-                // Apply startup registry setting synchronously
-                if (_settings.StartWithWindows != _originalSettings.StartWithWindows)
-                {
-                    ApplyStartWithWindowsSync(_settings.StartWithWindows);
-                }
-
-                // Schedule async save operation without blocking UI
-                _logger.LogInformation("Scheduling async save operation in background");
-                _ = Task.Run(async () =>
-                {
-                    try
-                    {
-                        var saveStopwatch = System.Diagnostics.Stopwatch.StartNew();
-                        await _settingsManager.SaveAsync();
-                        saveStopwatch.Stop();
-                        _logger.LogInformation("Background save operation completed in {ElapsedMs}ms", saveStopwatch.ElapsedMilliseconds);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogError(ex, "Background save operation failed: {Message}", ex.Message);
-                        // Don't propagate error to UI since settings are already applied
-                    }
-                });
+                _logger.LogDebug("Starting settings application (sync)");
                 
-                // Update UI state immediately - don't wait for save
+                // Use the same individual property setting logic as async version
+                var liveSettings = _settingsManager.Settings;
+                
+                // Apply each setting individually to ensure PropertyChanged events fire
+                liveSettings.UseCustomColors = _settings.UseCustomColors;
+                liveSettings.CustomPrimaryColor = _settings.CustomPrimaryColor;
+                liveSettings.CustomSecondaryColor = _settings.CustomSecondaryColor;
+                liveSettings.EnableGradient = _settings.EnableGradient;
+                liveSettings.GradientDirection = _settings.GradientDirection;
+                liveSettings.VisualizationStyle = _settings.VisualizationStyle;
+                liveSettings.RenderQuality = _settings.RenderQuality;
+                liveSettings.Opacity = _settings.Opacity;
+                liveSettings.FrequencyBands = _settings.FrequencyBands;
+                liveSettings.SmoothingFactor = _settings.SmoothingFactor;
+                liveSettings.GainFactor = _settings.GainFactor;
+
+                // Force synchronous save to complete event propagation
+                Task.Run(async () => await _settingsManager.SaveAsync()).Wait();
+                
                 _originalSettings = _settings.Clone();
                 _applyButton.Enabled = false;
                 
@@ -1102,12 +1084,8 @@ namespace TaskbarEqualizer.Main
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to apply settings (sync)");
+                _logger.LogError(ex, "Failed to apply settings synchronously");
                 throw;
-            }
-            finally
-            {
-                _isApplyingSettings = false;
             }
         }
 
@@ -1211,6 +1189,10 @@ namespace TaskbarEqualizer.Main
                    Math.Abs(_settings.VolumeThreshold - _originalSettings.VolumeThreshold) > 0.01;
         }
 
+        /// <summary>
+        /// Applies settings changes with proper event propagation for immediate visual updates.
+        /// This method ensures each setting change fires individual PropertyChanged events.
+        /// </summary>
         private async Task ApplySettings()
         {
             if (_isApplyingSettings)
@@ -1222,41 +1204,102 @@ namespace TaskbarEqualizer.Main
             try
             {
                 _isApplyingSettings = true;
+                _logger.LogDebug("Starting settings application (async)");
 
-                _logger.LogDebug("Applying settings changes to live settings instance (async)");
+                // CRITICAL FIX: Force immediate property change events by setting each property individually
+                // This ensures PropertyChanged events fire for each setting, enabling proper event propagation
+                var liveSettings = _settingsManager.Settings;
+                
+                // Color settings - these directly affect your taskbar spectrum appearance
+                if (liveSettings.UseCustomColors != _settings.UseCustomColors)
+                {
+                    liveSettings.UseCustomColors = _settings.UseCustomColors;
+                    _logger.LogDebug("Applied UseCustomColors: {Value}", _settings.UseCustomColors);
+                }
+                
+                if (liveSettings.CustomPrimaryColor != _settings.CustomPrimaryColor)
+                {
+                    liveSettings.CustomPrimaryColor = _settings.CustomPrimaryColor;
+                    _logger.LogDebug("Applied CustomPrimaryColor: {Color}", _settings.CustomPrimaryColor);
+                }
+                
+                if (liveSettings.CustomSecondaryColor != _settings.CustomSecondaryColor)
+                {
+                    liveSettings.CustomSecondaryColor = _settings.CustomSecondaryColor;
+                    _logger.LogDebug("Applied CustomSecondaryColor: {Color}", _settings.CustomSecondaryColor);
+                }
+                
+                if (liveSettings.EnableGradient != _settings.EnableGradient)
+                {
+                    liveSettings.EnableGradient = _settings.EnableGradient;
+                    _logger.LogDebug("Applied EnableGradient: {Value}", _settings.EnableGradient);
+                }
+                
+                if (liveSettings.GradientDirection != _settings.GradientDirection)
+                {
+                    liveSettings.GradientDirection = _settings.GradientDirection;
+                    _logger.LogDebug("Applied GradientDirection: {Value}", _settings.GradientDirection);
+                }
 
-                // Copy the dialog settings to the actual settings instance using bulk update to avoid event storm
-                // BUT enable events so that SettingsChanged gets fired to notify ApplicationOrchestrator
-                _logger.LogInformation("Copying dialog settings to manager settings using bulk update WITH events");
-                _settings.CopyTo(_settingsManager.Settings, suppressEvents: false);
-                _logger.LogDebug("Settings copy completed");
+                // Visualization style settings that control spectrum appearance
+                if (liveSettings.VisualizationStyle != _settings.VisualizationStyle)
+                {
+                    liveSettings.VisualizationStyle = _settings.VisualizationStyle;
+                    _logger.LogDebug("Applied VisualizationStyle: {Style}", _settings.VisualizationStyle);
+                }
+                
+                if (liveSettings.RenderQuality != _settings.RenderQuality)
+                {
+                    liveSettings.RenderQuality = _settings.RenderQuality;
+                    _logger.LogDebug("Applied RenderQuality: {Quality}", _settings.RenderQuality);
+                }
+                
+                if (Math.Abs(liveSettings.Opacity - _settings.Opacity) > 0.01f)
+                {
+                    liveSettings.Opacity = _settings.Opacity;
+                    _logger.LogDebug("Applied Opacity: {Opacity}", _settings.Opacity);
+                }
 
-                // Explicitly mark settings as dirty since bulk update might not trigger it immediately
-                _logger.LogDebug("Explicitly marking settings as dirty");
-                _settingsManager.MarkAsDirty();
-                _logger.LogDebug("Settings marked as dirty. Manager IsDirty: {IsDirty}", _settingsManager.IsDirty);
+                // Audio visualization parameters that affect spectrum behavior
+                if (liveSettings.FrequencyBands != _settings.FrequencyBands)
+                {
+                    liveSettings.FrequencyBands = _settings.FrequencyBands;
+                    _logger.LogDebug("Applied FrequencyBands: {Bands}", _settings.FrequencyBands);
+                }
+                
+                if (Math.Abs(liveSettings.SmoothingFactor - _settings.SmoothingFactor) > 0.01)
+                {
+                    liveSettings.SmoothingFactor = _settings.SmoothingFactor;
+                    _logger.LogDebug("Applied SmoothingFactor: {Factor}", _settings.SmoothingFactor);
+                }
+                
+                if (Math.Abs(liveSettings.GainFactor - _settings.GainFactor) > 0.01)
+                {
+                    liveSettings.GainFactor = _settings.GainFactor;
+                    _logger.LogDebug("Applied GainFactor: {Factor}", _settings.GainFactor);
+                }
 
-                // Apply startup registry setting
+                // Apply Windows startup setting if changed
                 if (_settings.StartWithWindows != _originalSettings.StartWithWindows)
                 {
-                    _logger.LogDebug("Applying startup registry setting: {StartWithWindows}", _settings.StartWithWindows);
                     await ApplyStartWithWindows(_settings.StartWithWindows);
                 }
 
-                _logger.LogInformation("Starting async save operation");
+                // Force save to trigger complete event propagation chain
                 await _settingsManager.SaveAsync();
-                _logger.LogInformation("Async save operation completed successfully");
+                
+                // Update dialog state to reflect successful application
                 _originalSettings = _settings.Clone();
                 _applyButton.Enabled = false;
                 
-                _logger.LogInformation("Settings applied successfully");
+                _logger.LogInformation("Settings applied successfully with immediate event propagation");
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to apply settings - Exception details: {ExceptionType}: {Message}", 
+                _logger.LogError(ex, "Failed to apply settings - Exception: {ExceptionType}: {Message}", 
                     ex.GetType().Name, ex.Message);
-                MessageBox.Show($"Failed to apply settings: {ex.Message}\n\nSee application logs for more details.", 
-                    "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show($"Failed to apply settings: {ex.Message}\n\nSee application logs for details.",
+                    "Settings Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
             finally
             {

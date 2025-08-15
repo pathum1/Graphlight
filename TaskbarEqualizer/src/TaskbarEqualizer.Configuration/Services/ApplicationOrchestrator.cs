@@ -528,138 +528,162 @@ namespace TaskbarEqualizer.Configuration.Services
         }
 
         /// <summary>
-        /// Handles settings change events.
+        /// Handles settings change events with proper sequencing and immediate taskbar spectrum updates.
+        /// This method orchestrates updates to all visualization components when settings change.
         /// </summary>
-        /// <param name="sender">Event sender.</param>
-        /// <param name="e">Event arguments.</param>
+        /// <param name="sender">Event sender (typically SettingsManager)</param>
+        /// <param name="e">Event arguments containing information about which settings changed</param>
         private async void OnSettingsChanged(object? sender, SettingsChangedEventArgs e)
         {
             try
             {
-                _logger.LogDebug("Settings changed: {ChangedKeys}", string.Join(", ", e.ChangedKeys));
+                _logger.LogInformation("Settings changed: {ChangedKeys} - updating taskbar spectrum", 
+                    string.Join(", ", e.ChangedKeys));
                 
-                // Note: We removed the _isSettingsDialogOpen check here because:
-                // 1. We DO want settings to be applied when the user clicks Apply
-                // 2. The settings dialog uses cloned settings to prevent unwanted events during editing
-                // 3. The only events that should reach here are from actual Apply operations
                 var settings = _settingsManager.Settings;
+                
+                // Categorize settings changes to determine which components need updates
+                bool needsTaskbarUpdate = false;
+                bool needsAudioUpdate = false;
+                bool needsFrequencyUpdate = false;
+
+                // Settings that affect taskbar spectrum visualization appearance
+                var taskbarVisualizationSettings = new[]
+                {
+                    "UseCustomColors", "CustomPrimaryColor", "CustomSecondaryColor", 
+                    "EnableGradient", "GradientDirection", "VisualizationStyle", 
+                    "RenderQuality", "Opacity", "FrequencyBands", "SmoothingFactor", 
+                    "GainFactor", "EnableAnimations", "EnableEffects", "AnimationSpeed",
+                    "UpdateInterval", "MaxFrameRate"
+                };
+
+                // Settings that affect audio capture and processing
+                var audioSettings = new[]
+                {
+                    "SelectedAudioDevice", "EnableAutoDeviceSwitch", "VolumeThreshold"
+                };
+
+                // Settings that affect frequency analysis algorithms
+                var frequencySettings = new[]
+                {
+                    "FrequencyBands", "SmoothingFactor", "GainFactor", "UpdateInterval"
+                };
+
+                // Determine which categories of updates are needed
+                if (taskbarVisualizationSettings.Any(setting => e.ChangedKeys.Contains(setting)))
+                {
+                    needsTaskbarUpdate = true;
+                    var changedTaskbarSettings = taskbarVisualizationSettings.Where(setting => e.ChangedKeys.Contains(setting));
+                    _logger.LogInformation("Taskbar visualization settings changed: {Settings}", 
+                        string.Join(", ", changedTaskbarSettings));
+                }
+
+                if (audioSettings.Any(setting => e.ChangedKeys.Contains(setting)))
+                {
+                    needsAudioUpdate = true;
+                }
+
+                if (frequencySettings.Any(setting => e.ChangedKeys.Contains(setting)))
+                {
+                    needsFrequencyUpdate = true;
+                }
+
+                // CRITICAL: Update taskbar overlay FIRST with proper error handling
+                if (needsTaskbarUpdate)
+                {
+                    try
+                    {
+                        _logger.LogInformation("Updating taskbar spectrum analyzer with new settings...");
+                        
+                        // This is the most important call - updates your taskbar spectrum colors and style
+                        await _taskbarOverlayManager.UpdateSettingsAsync(settings);
+                        
+                        _logger.LogInformation("Taskbar spectrum analyzer updated successfully!");
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "CRITICAL: Failed to update taskbar spectrum analyzer");
+                        // Continue with other updates even if taskbar update fails
+                    }
+                }
+
+                // Update audio capture settings if needed
+                if (needsAudioUpdate)
+                {
+                    try
+                    {
+                        await UpdateAudioCaptureSettings(settings);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Failed to update audio capture settings");
+                    }
+                }
+
+                // Update frequency analyzer settings if needed
+                if (needsFrequencyUpdate)
+                {
+                    try
+                    {
+                        await UpdateFrequencyAnalyzerAsync(settings);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Failed to update frequency analyzer settings");
+                    }
+                }
+
+                // Update spectrum window (separate from taskbar) if present
+                if (needsTaskbarUpdate && _spectrumWindow != null)
+                {
+                    try
+                    {
+                        await UpdateSpectrumWindowSettings(settings);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Failed to update spectrum window settings");
+                    }
+                }
 
                 // Handle auto-start setting changes
                 if (e.ChangedKeys.Contains("StartWithWindows"))
                 {
-                    if (settings.StartWithWindows)
+                    try
                     {
-                        await _autoStartManager.EnableAutoStartAsync();
-                        _logger.LogInformation("Auto-start enabled via settings");
+                        if (settings.StartWithWindows)
+                        {
+                            await _autoStartManager.EnableAutoStartAsync();
+                            _logger.LogInformation("Auto-start enabled via settings");
+                        }
+                        else
+                        {
+                            await _autoStartManager.DisableAutoStartAsync();
+                            _logger.LogInformation("Auto-start disabled via settings");
+                        }
                     }
-                    else
+                    catch (Exception ex)
                     {
-                        await _autoStartManager.DisableAutoStartAsync();
-                        _logger.LogInformation("Auto-start disabled via settings");
-                    }
-                }
-
-                // Handle audio device settings changes
-                var needsAudioCaptureUpdate = false;
-                if (e.ChangedKeys.Contains("SelectedAudioDevice"))
-                {
-                    needsAudioCaptureUpdate = true;
-                    _logger.LogDebug("Selected audio device changed to: {AudioDevice}", settings.SelectedAudioDevice);
-                }
-
-                // Handle spectrum analyzer settings changes
-                var needsFrequencyAnalyzerUpdate = false;
-                var needsSpectrumWindowUpdate = false;
-
-                if (e.ChangedKeys.Contains("FrequencyBands"))
-                {
-                    needsFrequencyAnalyzerUpdate = true;
-                    needsSpectrumWindowUpdate = true;
-                    _logger.LogDebug("Frequency bands changed to: {FrequencyBands}", settings.FrequencyBands);
-                }
-
-                if (e.ChangedKeys.Contains("SmoothingFactor"))
-                {
-                    needsFrequencyAnalyzerUpdate = true;
-                    needsSpectrumWindowUpdate = true;
-                    _logger.LogDebug("Smoothing factor changed to: {SmoothingFactor}", settings.SmoothingFactor);
-                }
-
-                if (e.ChangedKeys.Contains("UpdateInterval"))
-                {
-                    needsSpectrumWindowUpdate = true;
-                    _logger.LogDebug("Update interval changed to: {UpdateInterval}ms", settings.UpdateInterval);
-                }
-
-                if (e.ChangedKeys.Contains("GainFactor"))
-                {
-                    needsSpectrumWindowUpdate = true;
-                    _logger.LogDebug("Gain factor changed to: {GainFactor}", settings.GainFactor);
-                }
-
-                if (e.ChangedKeys.Contains("VolumeThreshold"))
-                {
-                    needsSpectrumWindowUpdate = true;
-                    _logger.LogDebug("Volume threshold changed to: {VolumeThreshold}", settings.VolumeThreshold);
-                }
-
-                // Additional visualization settings that require overlay updates
-                var visualizationSettings = new[]
-                {
-                    "IconSize", "VisualizationStyle", "RenderQuality", "EnableAnimations", 
-                    "EnableEffects", "UseCustomColors", "CustomPrimaryColor", "CustomSecondaryColor",
-                    "EnableGradient", "GradientDirection", "Opacity", "AnimationSpeed",
-                    "EnableBeatDetection", "EnableSpringPhysics", "SpringStiffness", 
-                    "SpringDamping", "ChangeThreshold", "AdaptiveQuality", "MaxFrameRate"
-                };
-
-                var changedVizSettings = visualizationSettings.Where(setting => e.ChangedKeys.Contains(setting));
-                if (changedVizSettings.Any())
-                {
-                    needsSpectrumWindowUpdate = true;
-                    _logger.LogInformation("Visualization settings changed: {Settings}", string.Join(", ", changedVizSettings));
-                }
-
-                // Handle CustomSettings changes - these can contain color and visualization changes
-                if (e.ChangedKeys.Contains("CustomSettings"))
-                {
-                    needsSpectrumWindowUpdate = true;
-                    _logger.LogDebug("CustomSettings changed - updating spectrum window for potential color/style changes");
-                    
-                    // Also update taskbar overlay for CustomSettings changes since they may include color/style changes
-                    var customSettingsVizChanges = visualizationSettings.Where(setting => e.ChangedKeys.Contains(setting));
-                    if (!customSettingsVizChanges.Any())
-                    {
-                        // If no specific visualization settings were detected, assume color/style changes in CustomSettings
-                        _logger.LogDebug("No explicit visualization settings found, treating CustomSettings as color/style change");
+                        _logger.LogError(ex, "Failed to update auto-start settings");
                     }
                 }
 
-                // Apply audio capture updates
-                if (needsAudioCaptureUpdate)
+                // Save settings only after all updates are complete
+                try
                 {
-                    await UpdateAudioCaptureSettings(settings);
+                    await _settingsManager.SaveAsync();
+                    _logger.LogDebug("Settings saved after applying all updates");
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Failed to save settings after updates");
                 }
 
-                // Apply frequency analyzer updates
-                if (needsFrequencyAnalyzerUpdate)
-                {
-                    await UpdateFrequencyAnalyzerAsync(settings);
-                }
-
-                // Apply spectrum window updates to TaskbarOverlayManager and Spectrum Window
-                if (needsSpectrumWindowUpdate)
-                {
-                    await UpdateTaskbarOverlaySettingsAsync(settings);
-                    await UpdateSpectrumWindowSettings(settings);
-                }
-
-                // Note: Settings are already saved by the caller (SettingsDialog or other source)
-                // Removing duplicate SaveAsync call to prevent conflicts with bulk update mechanism
+                _logger.LogInformation("Settings change handling completed successfully");
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error handling settings change");
+                _logger.LogError(ex, "Critical error handling settings change");
             }
         }
 
@@ -902,23 +926,40 @@ namespace TaskbarEqualizer.Configuration.Services
         }
 
         /// <summary>
-        /// Updates the TaskbarOverlayManager with new visualization settings.
+        /// Enhanced taskbar overlay settings update with comprehensive error handling and validation.
+        /// This method ensures the taskbar spectrum analyzer receives and applies new settings immediately.
         /// </summary>
-        /// <param name="settings">The updated application settings.</param>
+        /// <param name="settings">Application settings containing visualization parameters</param>
         private async Task UpdateTaskbarOverlaySettingsAsync(ApplicationSettings settings)
         {
             try
             {
-                _logger.LogInformation("Updating TaskbarOverlayManager with new settings");
+                _logger.LogInformation("Starting taskbar overlay update with settings...");
                 
-                // Update the taskbar overlay manager with the new settings
+                // Update the taskbar overlay manager with comprehensive logging
                 await _taskbarOverlayManager.UpdateSettingsAsync(settings);
                 
-                _logger.LogInformation("TaskbarOverlayManager updated successfully with new settings");
+                // Verification step - ensure the overlay is active and responsive
+                if (!_taskbarOverlayManager.IsActive)
+                {
+                    _logger.LogWarning("Taskbar overlay is not active - attempting to show it");
+                    try
+                    {
+                        await _taskbarOverlayManager.ShowAsync();
+                        _logger.LogInformation("Taskbar overlay activated successfully");
+                    }
+                    catch (Exception showEx)
+                    {
+                        _logger.LogError(showEx, "Failed to show taskbar overlay");
+                    }
+                }
+                
+                _logger.LogInformation("Taskbar overlay settings update completed successfully");
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to update TaskbarOverlayManager with new settings");
+                _logger.LogError(ex, "Failed to update taskbar overlay settings - your spectrum may not update visually");
+                throw; // Re-throw to let caller handle
             }
         }
 

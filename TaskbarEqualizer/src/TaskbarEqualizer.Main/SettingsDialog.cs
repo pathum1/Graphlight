@@ -1063,9 +1063,9 @@ namespace TaskbarEqualizer.Main
                 _logger.LogDebug("Applying settings changes to live settings instance");
 
                 // Copy the dialog settings to the actual settings instance using bulk update to prevent event flooding
-                // Apply changes immediately for instant UI updates
-                _logger.LogDebug("Copying settings using bulk update to prevent event flooding");
-                _settings.CopyTo(_settingsManager.Settings, suppressEvents: true);
+                // BUT enable events so that SettingsChanged gets fired to notify ApplicationOrchestrator
+                _logger.LogDebug("Copying settings using bulk update WITH events to ensure UI updates");
+                _settings.CopyTo(_settingsManager.Settings, suppressEvents: false);
 
                 // Explicitly mark settings as dirty since bulk update might not trigger it immediately
                 _settingsManager.MarkAsDirty();
@@ -1226,8 +1226,9 @@ namespace TaskbarEqualizer.Main
                 _logger.LogDebug("Applying settings changes to live settings instance (async)");
 
                 // Copy the dialog settings to the actual settings instance using bulk update to avoid event storm
-                _logger.LogInformation("Copying dialog settings to manager settings using bulk update");
-                _settings.CopyTo(_settingsManager.Settings, suppressEvents: true);
+                // BUT enable events so that SettingsChanged gets fired to notify ApplicationOrchestrator
+                _logger.LogInformation("Copying dialog settings to manager settings using bulk update WITH events");
+                _settings.CopyTo(_settingsManager.Settings, suppressEvents: false);
                 _logger.LogDebug("Settings copy completed");
 
                 // Explicitly mark settings as dirty since bulk update might not trigger it immediately

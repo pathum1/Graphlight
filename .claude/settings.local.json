@@ -33,7 +33,10 @@
       "Bash(grep:*)",
       "WebFetch(domain:www.codeproject.com)",
       "Bash(./TaskbarEqualizer.Main.exe)",
-      "Bash(./TaskbarEqualizer.Main.exe --minimized)"
+      "Bash(./TaskbarEqualizer.Main.exe --minimized)",
+      "Bash(Get-Date -Format \"yyyy-MM-dd HH:mm:ss\")",
+      "Bash(true)",
+      "Bash(cmd /c:*)"
     ],
     "deny": []
   }

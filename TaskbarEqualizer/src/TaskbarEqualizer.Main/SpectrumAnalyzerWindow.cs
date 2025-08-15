@@ -253,8 +253,8 @@ namespace TaskbarEqualizer.Main
             // Check visualization style
             var visualizationStyle = _settings?.VisualizationStyle ?? EqualizerStyle.Bars;
             
-            // Debug logging to verify colors and styles are being applied
-            _logger.LogDebug("Drawing with style: {Style}, UseCustomColors: {UseCustom}, Primary: {Primary}, Secondary: {Secondary}",
+            // Debug logging to verify colors and styles are being applied - FORCE THIS TO INFO LEVEL
+            _logger.LogInformation("DRAWING SPECTRUM: Style={Style}, UseCustomColors={UseCustom}, Primary={Primary}, Secondary={Secondary}",
                 visualizationStyle, _settings?.UseCustomColors, primaryColor, secondaryColor);
 
             switch (visualizationStyle)

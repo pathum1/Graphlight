@@ -320,24 +320,33 @@ namespace TaskbarEqualizer.SystemTray
                 var useCustomColorsProp = settingsType.GetProperty("UseCustomColors");
                 var useCustomColors = useCustomColorsProp?.GetValue(settings) is bool customColors && customColors;
 
-                _logger.LogDebug("UseCustomColors setting: {UseCustomColors}", useCustomColors);
+                // Enhanced logging to track the UseCustomColors flag issue
+                _logger.LogInformation("COLOR DEBUGGING: UseCustomColors property found: {PropertyFound}, Raw value: {RawValue}, Parsed: {UseCustomColors}", 
+                    useCustomColorsProp != null, useCustomColorsProp?.GetValue(settings), useCustomColors);
+
+                // Enhanced logging to show available color properties
+                var primaryColorProp = settingsType.GetProperty("CustomPrimaryColor");
+                var secondaryColorProp = settingsType.GetProperty("CustomSecondaryColor");
+                var primaryColorValue = primaryColorProp?.GetValue(settings);
+                var secondaryColorValue = secondaryColorProp?.GetValue(settings);
+                
+                _logger.LogInformation("COLOR DEBUGGING: Available color properties - Primary: {PrimaryProp} (value: {PrimaryValue}), Secondary: {SecondaryProp} (value: {SecondaryValue})", 
+                    primaryColorProp != null, primaryColorValue, secondaryColorProp != null, secondaryColorValue);
 
                 if (useCustomColors)
                 {
                     // Apply custom colors when UseCustomColors is true
-                    var primaryColorProp = settingsType.GetProperty("CustomPrimaryColor");
-                    if (primaryColorProp?.GetValue(settings) is System.Drawing.Color primaryColor)
+                    if (primaryColorValue is System.Drawing.Color primaryColor)
                     {
                         colorScheme.PrimaryColor = primaryColor;
-                        _logger.LogDebug("Applied custom primary color: {Color} (A={A}, R={R}, G={G}, B={B})", 
+                        _logger.LogInformation("COLOR DEBUGGING: Applied custom primary color: {Color} (A={A}, R={R}, G={G}, B={B})", 
                             primaryColor.Name, primaryColor.A, primaryColor.R, primaryColor.G, primaryColor.B);
                     }
 
-                    var secondaryColorProp = settingsType.GetProperty("CustomSecondaryColor");
-                    if (secondaryColorProp?.GetValue(settings) is System.Drawing.Color secondaryColor)
+                    if (secondaryColorValue is System.Drawing.Color secondaryColor)
                     {
                         colorScheme.SecondaryColor = secondaryColor;
-                        _logger.LogDebug("Applied custom secondary color: {Color} (A={A}, R={R}, G={G}, B={B})", 
+                        _logger.LogInformation("COLOR DEBUGGING: Applied custom secondary color: {Color} (A={A}, R={R}, G={G}, B={B})", 
                             secondaryColor.Name, secondaryColor.A, secondaryColor.R, secondaryColor.G, secondaryColor.B);
                     }
                 }
@@ -346,7 +355,8 @@ namespace TaskbarEqualizer.SystemTray
                     // Use default theme colors when UseCustomColors is false
                     colorScheme.PrimaryColor = Color.FromArgb(0, 120, 215); // Windows 11 accent blue
                     colorScheme.SecondaryColor = Color.FromArgb(0, 90, 158);
-                    _logger.LogDebug("Using default theme colors - UseCustomColors is false");
+                    _logger.LogInformation("COLOR DEBUGGING: Using default theme colors - UseCustomColors is false, Applied Primary: {Primary}, Secondary: {Secondary}", 
+                        colorScheme.PrimaryColor, colorScheme.SecondaryColor);
                 }
 
                 // EnableGradient

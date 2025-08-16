@@ -195,6 +195,7 @@ namespace TaskbarEqualizer.SystemTray
                         Quality = _configuration.RenderConfiguration?.Quality ?? RenderQuality.High,
                         AntiAliasing = _configuration.RenderConfiguration?.AntiAliasing ?? true,
                         EnableEffects = _configuration.RenderConfiguration?.EnableEffects ?? true,
+                        EnableAnimations = _configuration.RenderConfiguration?.EnableAnimations ?? true,
                         AdaptiveQuality = _configuration.RenderConfiguration?.AdaptiveQuality ?? true,
                         ChangeThreshold = _configuration.RenderConfiguration?.ChangeThreshold ?? 0.02,
                         ColorScheme = new ColorScheme
@@ -287,7 +288,8 @@ namespace TaskbarEqualizer.SystemTray
                 var enableAnimationsProp = settingsType.GetProperty("EnableAnimations");
                 if (enableAnimationsProp?.GetValue(settings) is bool enableAnimations)
                 {
-                    _logger.LogDebug("Animations enabled: {Enabled}", enableAnimations);
+                    renderConfig.EnableAnimations = enableAnimations;
+                    _logger.LogDebug("Updated animations enabled to {Enabled}", enableAnimations);
                 }
 
                 // EnableEffects
@@ -1134,7 +1136,38 @@ namespace TaskbarEqualizer.SystemTray
                 for (int i = 0; i < targetLength; i++)
                 {
                     var newValue = (float)spectrumData.Spectrum[i];
-                    var currentValue = _smoothedSpectrum[i];
+                    
+                    // Apply frequency response curve to enhance treble while preserving bass
+                    // Lower frequencies (bass): little to no enhancement
+                    // Mid frequencies: moderate enhancement  
+                    // Higher frequencies (treble): significant enhancement
+                    var frequencyRatio = (float)i / targetLength; // 0.0 = bass, 1.0 = treble
+                    
+                    // Create a frequency response curve:
+                    // - Bass (0-30%): 1.0x (no change)
+                    // - Mid (30-70%): gradual increase 1.0x to 1.3x
+                    // - Treble (70-100%): stronger enhancement 1.3x to 1.8x
+                    float frequencyBoost;
+                    if (frequencyRatio < 0.3f)
+                    {
+                        // Bass range: preserve natural response
+                        frequencyBoost = 1.0f;
+                    }
+                    else if (frequencyRatio < 0.7f)
+                    {
+                        // Mid range: gradual enhancement
+                        var midRatio = (frequencyRatio - 0.3f) / 0.4f; // 0.0 to 1.0 in mid range
+                        frequencyBoost = 1.0f + (0.3f * midRatio); // 1.0x to 1.3x
+                    }
+                    else
+                    {
+                        // Treble range: stronger enhancement
+                        var trebleRatio = (frequencyRatio - 0.7f) / 0.3f; // 0.0 to 1.0 in treble range
+                        frequencyBoost = 1.3f + (0.5f * trebleRatio); // 1.3x to 1.8x
+                    }
+                    
+                    // Apply frequency boost to the new value
+                    newValue *= frequencyBoost;
                     
                     // Use configurable smoothing factor like the main spectrum analyzer
                     _smoothedSpectrum[i] = _smoothedSpectrum[i] * _smoothingFactor + 
@@ -1183,9 +1216,31 @@ namespace TaskbarEqualizer.SystemTray
                 var bitmap = new Bitmap(size.Width, size.Height);
                 using var graphics = Graphics.FromImage(bitmap);
                 
-                // Set high quality rendering
-                graphics.SmoothingMode = SmoothingMode.AntiAlias;
-                graphics.CompositingQuality = CompositingQuality.HighQuality;
+                // Set rendering quality based on configuration
+                var renderConfig = _configuration?.RenderConfiguration;
+                var quality = renderConfig?.Quality ?? RenderQuality.High;
+                var enableEffects = renderConfig?.EnableEffects ?? true;
+
+                // Apply quality settings
+                switch (quality)
+                {
+                    case RenderQuality.Low:
+                        graphics.SmoothingMode = SmoothingMode.HighSpeed;
+                        graphics.CompositingQuality = CompositingQuality.HighSpeed;
+                        graphics.InterpolationMode = InterpolationMode.Low;
+                        break;
+                    case RenderQuality.Medium:
+                        graphics.SmoothingMode = SmoothingMode.Default;
+                        graphics.CompositingQuality = CompositingQuality.Default;
+                        graphics.InterpolationMode = InterpolationMode.Default;
+                        break;
+                    case RenderQuality.High:
+                    default:
+                        graphics.SmoothingMode = enableEffects ? SmoothingMode.AntiAlias : SmoothingMode.Default;
+                        graphics.CompositingQuality = CompositingQuality.HighQuality;
+                        graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                        break;
+                }
 
                 // Clear background
                 graphics.Clear(Color.Transparent);
@@ -1273,6 +1328,9 @@ namespace TaskbarEqualizer.SystemTray
                         break;
                     case EqualizerStyle.Dots:
                         RenderDotsStyle(graphics, size, barCount, barWidth, maxHeight, primaryColor, secondaryColor, colorScheme);
+                        break;
+                    case EqualizerStyle.Dashes:
+                        RenderDashesStyle(graphics, size, barCount, barWidth, maxHeight, primaryColor, secondaryColor, colorScheme);
                         break;
                     case EqualizerStyle.Waveform:
                         RenderWaveformStyle(graphics, size, maxHeight, primaryColor, secondaryColor, colorScheme);
@@ -1409,6 +1467,40 @@ namespace TaskbarEqualizer.SystemTray
                     
                     using var brush = new SolidBrush(dotColor);
                     graphics.FillEllipse(brush, x, y, dotSize, dotSize);
+                }
+            }
+        }
+
+        private void RenderDashesStyle(Graphics graphics, Size size, int barCount, float barWidth, int maxHeight, Color primaryColor, Color secondaryColor, ColorScheme? colorScheme)
+        {
+            var dashWidth = Math.Max(4, barWidth * 0.8f); // Dash width based on available width
+            var dashHeight = Math.Max(2, size.Height / 40f); // Proportional dash height
+            
+            for (int i = 0; i < barCount; i++)
+            {
+                var level = Math.Max(0, Math.Min(1, _smoothedSpectrum[i] * (float)_gainFactor));
+                var numDashes = (int)(level * (maxHeight / (dashHeight + 2))); // Number of dashes based on level
+                
+                var x = 2 + i * barWidth + (barWidth - dashWidth) / 2; // Center dash in bar space
+                
+                for (int d = 0; d < numDashes; d++)
+                {
+                    var y = size.Height - 2 - (d * (dashHeight + 2)) - dashHeight;
+                    
+                    // Color interpolation for gradient effect
+                    Color dashColor;
+                    if (colorScheme?.UseGradient == true)
+                    {
+                        var ratio = (float)d / Math.Max(1, numDashes - 1);
+                        dashColor = InterpolateColor(primaryColor, secondaryColor, ratio);
+                    }
+                    else
+                    {
+                        dashColor = primaryColor;
+                    }
+                    
+                    using var brush = new SolidBrush(dashColor);
+                    graphics.FillRectangle(brush, x, y, dashWidth, dashHeight);
                 }
             }
         }

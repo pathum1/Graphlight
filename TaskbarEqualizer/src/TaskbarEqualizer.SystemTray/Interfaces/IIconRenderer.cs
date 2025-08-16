@@ -170,6 +170,11 @@ namespace TaskbarEqualizer.SystemTray.Interfaces
         public bool EnableEffects { get; set; } = true;
 
         /// <summary>
+        /// Whether to enable animations.
+        /// </summary>
+        public bool EnableAnimations { get; set; } = true;
+
+        /// <summary>
         /// Animation configuration settings.
         /// </summary>
         public AnimationConfiguration Animation { get; set; } = new();
@@ -268,6 +273,11 @@ namespace TaskbarEqualizer.SystemTray.Interfaces
         /// Circular dots visualization.
         /// </summary>
         Dots,
+
+        /// <summary>
+        /// Horizontal dashes visualization.
+        /// </summary>
+        Dashes,
 
         /// <summary>
         /// Waveform representation.

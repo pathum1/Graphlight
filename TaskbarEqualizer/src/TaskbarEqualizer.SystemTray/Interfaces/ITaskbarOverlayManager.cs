@@ -1,4 +1,5 @@
 using System;
+using System.Drawing;
 using System.Threading;
 using System.Threading.Tasks;
 using TaskbarEqualizer.Core.Interfaces;
@@ -74,6 +75,17 @@ namespace TaskbarEqualizer.SystemTray.Interfaces
         /// <param name="cancellationToken">Cancellation token for the operation.</param>
         /// <returns>Task representing the asynchronous update.</returns>
         Task UpdateSettingsAsync(object settings, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Sets the callback functions for integrating with ApplicationSettings for position persistence.
+        /// </summary>
+        /// <param name="savePositionCallback">Callback to save position to ApplicationSettings</param>
+        /// <param name="getSavedPositionCallback">Callback to get saved position from ApplicationSettings</param>
+        /// <param name="isRememberPositionEnabledCallback">Callback to check if position remembering is enabled</param>
+        void SetApplicationSettingsCallbacks(
+            Action<Point>? savePositionCallback, 
+            Func<Point?>? getSavedPositionCallback, 
+            Func<bool>? isRememberPositionEnabledCallback);
     }
 
     /// <summary>
@@ -189,6 +201,21 @@ namespace TaskbarEqualizer.SystemTray.Interfaces
         /// Rendering configuration for the visualization.
         /// </summary>
         public RenderConfiguration RenderConfiguration { get; set; } = new();
+
+        /// <summary>
+        /// Custom X coordinate when Position is set to Custom.
+        /// </summary>
+        public int CustomX { get; set; } = 0;
+
+        /// <summary>
+        /// Custom Y coordinate when Position is set to Custom.
+        /// </summary>
+        public int CustomY { get; set; } = 0;
+
+        /// <summary>
+        /// Whether to remember and restore the overlay position across application restarts.
+        /// </summary>
+        public bool RememberPosition { get; set; } = false;
     }
 
     /// <summary>

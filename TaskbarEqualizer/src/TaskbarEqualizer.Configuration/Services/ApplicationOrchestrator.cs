@@ -1,4 +1,5 @@
 using System;
+using System.Drawing;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -258,11 +259,81 @@ namespace TaskbarEqualizer.Configuration.Services
                 Width = 500, // Reduced from 600 for better fit
                 Height = 80, // Good height for visibility
                 Opacity = 0.9f, // More opaque
-                UpdateFrequency = 60
+                UpdateFrequency = 60,
+                RememberPosition = settings.RememberPosition
             };
+
+            // Restore saved overlay position if RememberPosition is enabled
+            if (settings.RememberPosition && settings.WindowLocation != Point.Empty)
+            {
+                overlayConfig.Position = OverlayPosition.Custom;
+                overlayConfig.CustomX = settings.WindowLocation.X;
+                overlayConfig.CustomY = settings.WindowLocation.Y;
+                _logger.LogInformation("Restored taskbar overlay position: ({X}, {Y})", settings.WindowLocation.X, settings.WindowLocation.Y);
+            }
+            
+            // Set up ApplicationSettings callbacks for position persistence
+            _taskbarOverlayManager.SetApplicationSettingsCallbacks(
+                savePositionCallback: (position) =>
+                {
+                    try
+                    {
+                        var currentSettings = _settingsManager.Settings;
+                        currentSettings.WindowLocation = position;
+                        currentSettings.RememberPosition = true;
+                        
+                        // Save asynchronously
+                        Task.Run(async () =>
+                        {
+                            try
+                            {
+                                await _settingsManager.SaveAsync();
+                                _logger.LogInformation("Saved overlay position ({X}, {Y}) to ApplicationSettings", position.X, position.Y);
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.LogError(ex, "Failed to save overlay position to ApplicationSettings");
+                            }
+                        });
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Failed to update ApplicationSettings with overlay position");
+                    }
+                },
+                getSavedPositionCallback: () =>
+                {
+                    try
+                    {
+                        var currentSettings = _settingsManager.Settings;
+                        if (currentSettings.RememberPosition && currentSettings.WindowLocation != Point.Empty)
+                        {
+                            return currentSettings.WindowLocation;
+                        }
+                        return null;
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Failed to get saved overlay position from ApplicationSettings");
+                        return null;
+                    }
+                },
+                isRememberPositionEnabledCallback: () =>
+                {
+                    try
+                    {
+                        return _settingsManager.Settings.RememberPosition;
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Failed to check RememberPosition setting");
+                        return false;
+                    }
+                }
+            );
             
             await _taskbarOverlayManager.InitializeAsync(overlayConfig, cancellationToken);
-            _logger.LogDebug("Taskbar overlay manager initialized");
+            _logger.LogDebug("Taskbar overlay manager initialized with ApplicationSettings integration");
 
             // 5. Setup audio processing pipeline
             SetupAudioProcessingPipeline();

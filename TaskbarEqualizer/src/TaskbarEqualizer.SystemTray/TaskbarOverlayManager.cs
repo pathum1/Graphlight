@@ -30,6 +30,15 @@ namespace TaskbarEqualizer.SystemTray
         private readonly object _lock = new();
         private volatile bool _disposed;
 
+        // Callback for saving position to ApplicationSettings
+        private Action<Point>? _onPositionSavedToSettings;
+        
+        // Callback for getting saved position from ApplicationSettings
+        private Func<Point?>? _getSavedPosition;
+        
+        // Callback for checking if position remembering is enabled
+        private Func<bool>? _isRememberPositionEnabled;
+
         public event EventHandler<OverlayStatusChangedEventArgs>? StatusChanged;
 
         public bool IsActive => _status == OverlayStatus.Active;
@@ -40,6 +49,24 @@ namespace TaskbarEqualizer.SystemTray
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _iconRenderer = iconRenderer ?? throw new ArgumentNullException(nameof(iconRenderer));
             _configuration = new OverlayConfiguration();
+        }
+        
+        /// <summary>
+        /// Sets the callback functions for integrating with ApplicationSettings.
+        /// </summary>
+        /// <param name="savePositionCallback">Callback to save position to ApplicationSettings</param>
+        /// <param name="getSavedPositionCallback">Callback to get saved position from ApplicationSettings</param>
+        /// <param name="isRememberPositionEnabledCallback">Callback to check if position remembering is enabled</param>
+        public void SetApplicationSettingsCallbacks(
+            Action<Point>? savePositionCallback, 
+            Func<Point?>? getSavedPositionCallback, 
+            Func<bool>? isRememberPositionEnabledCallback)
+        {
+            _onPositionSavedToSettings = savePositionCallback;
+            _getSavedPosition = getSavedPositionCallback;
+            _isRememberPositionEnabled = isRememberPositionEnabledCallback;
+            
+            _logger.LogDebug("ApplicationSettings callbacks configured for overlay position persistence");
         }
 
         public Task InitializeAsync(OverlayConfiguration configuration, CancellationToken cancellationToken = default)
@@ -52,6 +79,9 @@ namespace TaskbarEqualizer.SystemTray
             try
             {
                 _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
+
+                // Restore saved position if RememberPosition is enabled
+                RestoreOverlayPosition();
 
                 lock (_lock)
                 {
@@ -529,7 +559,7 @@ namespace TaskbarEqualizer.SystemTray
             var taskbarBounds = GetTaskbarBounds();
             var overlayBounds = CalculateOverlayBounds(taskbarBounds);
 
-            _overlayWindow = new OverlayWindow(_logger, _iconRenderer, _configuration)
+            _overlayWindow = new OverlayWindow(_logger, _iconRenderer, _configuration, OnOverlayPositionChanged)
             {
                 Bounds = overlayBounds
             };
@@ -634,16 +664,208 @@ namespace TaskbarEqualizer.SystemTray
         {
             var width = _configuration.Width;
             var height = Math.Min(_configuration.Height, taskbarBounds.Height - (_configuration.Margin * 2));
-            var x = _configuration.Position switch
+            
+            int x, y;
+            
+            if (_configuration.Position == OverlayPosition.Custom)
             {
-                OverlayPosition.Left => taskbarBounds.Left + _configuration.Margin,
-                OverlayPosition.Right => taskbarBounds.Right - width - _configuration.Margin,
-                OverlayPosition.Center => taskbarBounds.Left + (taskbarBounds.Width - width) / 2,
-                _ => taskbarBounds.Left + (taskbarBounds.Width - width) / 2
-            };
-            var y = taskbarBounds.Top + (taskbarBounds.Height - height) / 2;
+                // Use custom coordinates directly
+                x = _configuration.CustomX;
+                y = _configuration.CustomY;
+                
+                // Validate that custom position is still on screen
+                if (!IsPositionOnScreen(x, y, width, height))
+                {
+                    _logger.LogWarning("Custom overlay position ({X}, {Y}) is off-screen, falling back to center", x, y);
+                    // Fall back to center position
+                    x = taskbarBounds.Left + (taskbarBounds.Width - width) / 2;
+                    y = taskbarBounds.Top + (taskbarBounds.Height - height) / 2;
+                }
+            }
+            else
+            {
+                // Use predefined positions
+                x = _configuration.Position switch
+                {
+                    OverlayPosition.Left => taskbarBounds.Left + _configuration.Margin,
+                    OverlayPosition.Right => taskbarBounds.Right - width - _configuration.Margin,
+                    OverlayPosition.Center => taskbarBounds.Left + (taskbarBounds.Width - width) / 2,
+                    _ => taskbarBounds.Left + (taskbarBounds.Width - width) / 2
+                };
+                y = taskbarBounds.Top + (taskbarBounds.Height - height) / 2;
+            }
 
             return new Rectangle(x, y, width, height);
+        }
+
+        private bool IsPositionOnScreen(int x, int y, int width, int height)
+        {
+            // Check if the overlay position is within any of the available screens
+            var overlayRect = new Rectangle(x, y, width, height);
+            
+            foreach (var screen in Screen.AllScreens)
+            {
+                // Check if the overlay intersects with the screen bounds
+                if (screen.Bounds.IntersectsWith(overlayRect))
+                {
+                    // Ensure at least 50% of the overlay is visible on screen
+                    var intersection = Rectangle.Intersect(screen.Bounds, overlayRect);
+                    var visibleArea = intersection.Width * intersection.Height;
+                    var totalArea = width * height;
+                    
+                    if (visibleArea >= totalArea * 0.5) // At least 50% visible
+                    {
+                        return true;
+                    }
+                }
+            }
+            
+            return false;
+        }
+
+
+        private bool ShouldRememberPosition()
+        {
+            // Check ApplicationSettings first if callback is available
+            if (_isRememberPositionEnabled != null)
+            {
+                var isEnabled = _isRememberPositionEnabled();
+                _logger.LogDebug("Position remembering enabled from ApplicationSettings: {Enabled}", isEnabled);
+                return isEnabled;
+            }
+            
+            // Fall back to configuration setting
+            var configEnabled = _configuration.RememberPosition;
+            _logger.LogDebug("Position remembering enabled from configuration: {Enabled}", configEnabled);
+            return configEnabled;
+        }
+
+        private void SavePositionToApplicationSettings(Point position)
+        {
+            try
+            {
+                if (_onPositionSavedToSettings != null)
+                {
+                    _onPositionSavedToSettings(position);
+                    _logger.LogInformation("Position ({X}, {Y}) saved to ApplicationSettings", position.X, position.Y);
+                }
+                else
+                {
+                    _logger.LogWarning("Cannot save position to ApplicationSettings - callback not configured");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to save position ({X}, {Y}) to ApplicationSettings", position.X, position.Y);
+            }
+        }
+
+        private void RestoreOverlayPosition()
+        {
+            try
+            {
+                // Check if RememberPosition is enabled
+                if (!ShouldRememberPosition())
+                {
+                    _logger.LogDebug("Position remembering is disabled, using default position");
+                    return;
+                }
+
+                // Try to get saved position from ApplicationSettings
+                var savedPosition = GetSavedPositionFromApplicationSettings();
+                if (savedPosition.HasValue)
+                {
+                    var position = savedPosition.Value;
+                    
+                    // Validate that the saved position is still on screen
+                    if (IsPositionOnScreen(position.X, position.Y, _configuration.Width, _configuration.Height))
+                    {
+                        lock (_lock)
+                        {
+                            _configuration.Position = OverlayPosition.Custom;
+                            _configuration.CustomX = position.X;
+                            _configuration.CustomY = position.Y;
+                            _configuration.RememberPosition = true;
+                        }
+
+                        _logger.LogInformation("Restored overlay position: ({X}, {Y})", position.X, position.Y);
+                    }
+                    else
+                    {
+                        _logger.LogWarning("Saved overlay position ({X}, {Y}) is off-screen, using default position", position.X, position.Y);
+                    }
+                }
+                else
+                {
+                    _logger.LogDebug("No saved overlay position found, using default position");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to restore overlay position, using default");
+            }
+        }
+
+        private Point? GetSavedPositionFromApplicationSettings()
+        {
+            try
+            {
+                if (_getSavedPosition != null)
+                {
+                    var savedPosition = _getSavedPosition();
+                    if (savedPosition.HasValue)
+                    {
+                        _logger.LogDebug("Retrieved saved position from ApplicationSettings: ({X}, {Y})", 
+                            savedPosition.Value.X, savedPosition.Value.Y);
+                    }
+                    else
+                    {
+                        _logger.LogDebug("No saved position found in ApplicationSettings");
+                    }
+                    return savedPosition;
+                }
+                else
+                {
+                    _logger.LogDebug("Cannot get saved position from ApplicationSettings - callback not configured");
+                    return null;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to get saved position from ApplicationSettings");
+                return null;
+            }
+        }
+
+        private void OnOverlayPositionChanged(Point position)
+        {
+            try
+            {
+                // Check if RememberPosition is enabled in the application settings
+                if (!ShouldRememberPosition())
+                {
+                    _logger.LogDebug("Position remembering is disabled, skipping save");
+                    return;
+                }
+
+                lock (_lock)
+                {
+                    // Update the configuration to use custom position
+                    _configuration.Position = OverlayPosition.Custom;
+                    _configuration.CustomX = position.X;
+                    _configuration.CustomY = position.Y;
+                    _configuration.RememberPosition = true;
+                }
+
+                _logger.LogInformation("Saved overlay position: ({X}, {Y})", position.X, position.Y);
+
+                // Save to application settings for persistence across restarts
+                SavePositionToApplicationSettings(position);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to save overlay position");
+            }
         }
 
         /// <summary>
@@ -974,11 +1196,14 @@ namespace TaskbarEqualizer.SystemTray
             BottomRight
         }
 
-        public OverlayWindow(ILogger logger, IIconRenderer iconRenderer, OverlayConfiguration configuration)
+        private readonly Action<Point>? _onPositionChanged;
+
+        public OverlayWindow(ILogger logger, IIconRenderer iconRenderer, OverlayConfiguration configuration, Action<Point>? onPositionChanged = null)
         {
             _logger = logger;
             _iconRenderer = iconRenderer;
             _configuration = configuration;
+            _onPositionChanged = onPositionChanged;
 
             SetupWindow();
         }
@@ -1772,6 +1997,8 @@ namespace TaskbarEqualizer.SystemTray
         {
             if (e.Button == MouseButtons.Left)
             {
+                bool wasDragging = _isDragging;
+                
                 _isDragging = false;
                 _isResizing = false;
                 _resizeDirection = ResizeDirection.None;
@@ -1779,6 +2006,12 @@ namespace TaskbarEqualizer.SystemTray
                 
                 // Reset drag throttling timer
                 _lastDragUpdate = DateTime.MinValue;
+                
+                // Save position if the user finished dragging and RememberPosition is enabled
+                if (wasDragging)
+                {
+                    _onPositionChanged?.Invoke(Location);
+                }
                 
                 // Force a final update after drag ends to ensure UI is current
                 Invalidate();

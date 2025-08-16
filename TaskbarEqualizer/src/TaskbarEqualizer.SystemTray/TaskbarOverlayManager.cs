@@ -438,24 +438,79 @@ namespace TaskbarEqualizer.SystemTray
                     _logger.LogDebug("Updated spring damping to {Damping}", springDamping);
                 }
 
-                // CRITICAL FIX: Apply configuration and force immediate visual refresh
-                _configuration = overlayConfig;
-                
-                // If overlay is currently active, force immediate update
-                if (_status == OverlayStatus.Active && _overlayWindow != null)
+                // FrequencyBands - store for later use in overlay window configuration
+                int? frequencyBands = null;
+                var frequencyBandsProp = settingsType.GetProperty("FrequencyBands");
+                if (frequencyBandsProp?.GetValue(settings) is int bands)
                 {
-                    // Update the overlay window's internal configuration
-                    await UpdateOverlayWindowConfigurationAsync();
-                    
-                    // Force immediate visual refresh of the spectrum display
-                    ForceOverlayRefresh();
-                    
-                    _logger.LogInformation("Taskbar spectrum settings updated and immediately refreshed");
+                    frequencyBands = bands;
+                    _logger.LogDebug("Updated frequency bands to {Bands}", bands);
+                }
+
+                // GainFactor - store for later use in overlay window configuration  
+                double? gainFactor = null;
+                var gainFactorProp = settingsType.GetProperty("GainFactor");
+                if (gainFactorProp?.GetValue(settings) is double gain)
+                {
+                    gainFactor = gain;
+                    _logger.LogDebug("Updated gain factor to {Gain}", gain);
+                }
+
+                // CRITICAL FIX: Thread-safe configuration update with proper synchronization
+                lock (_lock)
+                {
+                    _configuration = overlayConfig;
+                }
+                
+                // If overlay is currently active, force immediate update with safety checks
+                if (_status == OverlayStatus.Active && _overlayWindow != null && !_disposed)
+                {
+                    try
+                    {
+                        // Check if window is still valid before any operations
+                        if (_overlayWindow.IsDisposed || _overlayWindow.Disposing)
+                        {
+                            _logger.LogWarning("Overlay window is disposed or disposing, skipping configuration update");
+                            return;
+                        }
+
+                        // Update the overlay window's internal configuration safely
+                        UpdateOverlayWindowConfigurationSafe();
+                        
+                        // Update audio-specific settings (frequency bands and gain factor) with enhanced safety
+                        if ((frequencyBands.HasValue || gainFactor.HasValue))
+                        {
+                            UpdateAudioSettingsSafe(frequencyBands, gainFactor);
+                        }
+                        
+                        // Force immediate visual refresh of the spectrum display
+                        ForceOverlayRefreshSafe();
+                        
+                        _logger.LogInformation("Taskbar spectrum settings updated and immediately refreshed");
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                        _logger.LogWarning("Overlay window was disposed during settings update");
+                        return;
+                    }
+                    catch (InvalidOperationException ex)
+                    {
+                        _logger.LogWarning(ex, "Invalid operation during settings update, window may be disposed");
+                        return;
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Unexpected error during settings update");
+                        return;
+                    }
                 }
                 else
                 {
                     _logger.LogInformation("Taskbar spectrum settings updated (will apply when overlay becomes active)");
                 }
+
+                // Small delay to ensure all updates are processed
+                await Task.Delay(1, cancellationToken);
             }
             catch (Exception ex)
             {
@@ -603,7 +658,7 @@ namespace TaskbarEqualizer.SystemTray
                 // Force the overlay window to repaint immediately with proper thread safety
                 if (_overlayWindow.InvokeRequired)
                 {
-                    _overlayWindow.Invoke(new Action(() =>
+                    _overlayWindow.BeginInvoke(new Action(() =>
                     {
                         _overlayWindow.Invalidate(); // Mark entire window as needing repaint
                         _overlayWindow.Update();     // Force immediate repaint without waiting for message queue
@@ -627,7 +682,7 @@ namespace TaskbarEqualizer.SystemTray
         /// Updates the overlay window's internal configuration with thread safety.
         /// This ensures the window uses the latest settings for rendering operations.
         /// </summary>
-        private async Task UpdateOverlayWindowConfigurationAsync()
+        private void UpdateOverlayWindowConfiguration()
         {
             if (_overlayWindow == null || _disposed)
                 return;
@@ -643,11 +698,8 @@ namespace TaskbarEqualizer.SystemTray
                     // Ensure we're on the UI thread for window operations
                     if (_overlayWindow.InvokeRequired)
                     {
-                        await Task.Run(() =>
-                        {
-                            _overlayWindow.Invoke(new Action(() => 
-                                updateConfigMethod.Invoke(_overlayWindow, new object[] { _configuration })));
-                        });
+                        _overlayWindow.BeginInvoke(new Action(() => 
+                            updateConfigMethod.Invoke(_overlayWindow, new object[] { _configuration })));
                     }
                     else
                     {
@@ -660,6 +712,184 @@ namespace TaskbarEqualizer.SystemTray
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Failed to update overlay window configuration");
+            }
+        }
+
+        /// <summary>
+        /// Thread-safe version of UpdateOverlayWindowConfiguration with enhanced disposal checks.
+        /// </summary>
+        private void UpdateOverlayWindowConfigurationSafe()
+        {
+            if (_overlayWindow == null || _disposed || _overlayWindow.IsDisposed || _overlayWindow.Disposing)
+                return;
+
+            try
+            {
+                // Get configuration safely with lock
+                OverlayConfiguration currentConfig;
+                lock (_lock)
+                {
+                    currentConfig = _configuration;
+                }
+
+                // Update the overlay window's configuration using the async method
+                if (_overlayWindow.InvokeRequired)
+                {
+                    _overlayWindow.BeginInvoke(new Action(async () =>
+                    {
+                        try
+                        {
+                            if (!_overlayWindow.IsDisposed && !_overlayWindow.Disposing)
+                            {
+                                await _overlayWindow.UpdateConfigurationAsync(currentConfig);
+                            }
+                        }
+                        catch (ObjectDisposedException)
+                        {
+                            _logger.LogDebug("Window disposed during configuration update");
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning(ex, "Error updating overlay configuration on UI thread");
+                        }
+                    }));
+                }
+                else
+                {
+                    // We're already on the UI thread, but still use async properly
+                    Task.Run(async () =>
+                    {
+                        try
+                        {
+                            if (!_overlayWindow.IsDisposed && !_overlayWindow.Disposing)
+                            {
+                                await _overlayWindow.UpdateConfigurationAsync(currentConfig);
+                            }
+                        }
+                        catch (ObjectDisposedException)
+                        {
+                            _logger.LogDebug("Window disposed during configuration update");
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning(ex, "Error updating overlay configuration");
+                        }
+                    });
+                }
+                
+                _logger.LogDebug("Safely updated overlay window configuration");
+            }
+            catch (ObjectDisposedException)
+            {
+                _logger.LogDebug("Overlay window disposed during safe configuration update");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to safely update overlay window configuration");
+            }
+        }
+
+        /// <summary>
+        /// Thread-safe audio settings update with enhanced disposal checks.
+        /// </summary>
+        private void UpdateAudioSettingsSafe(int? frequencyBands, double? gainFactor)
+        {
+            if (_overlayWindow == null || _disposed || _overlayWindow.IsDisposed || _overlayWindow.Disposing)
+                return;
+
+            try
+            {
+                if (_overlayWindow.InvokeRequired)
+                {
+                    _overlayWindow.BeginInvoke(new Action(() =>
+                    {
+                        try
+                        {
+                            if (!_overlayWindow.IsDisposed && !_overlayWindow.Disposing)
+                            {
+                                _overlayWindow.UpdateAudioSettings(frequencyBands, gainFactor);
+                            }
+                        }
+                        catch (ObjectDisposedException)
+                        {
+                            _logger.LogDebug("Window disposed during audio settings update");
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning(ex, "Error updating audio settings on UI thread");
+                        }
+                    }));
+                }
+                else
+                {
+                    if (!_overlayWindow.IsDisposed && !_overlayWindow.Disposing)
+                    {
+                        _overlayWindow.UpdateAudioSettings(frequencyBands, gainFactor);
+                    }
+                }
+                
+                _logger.LogDebug("Safely updated audio settings");
+            }
+            catch (ObjectDisposedException)
+            {
+                _logger.LogDebug("Overlay window disposed during safe audio settings update");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to safely update audio settings");
+            }
+        }
+
+        /// <summary>
+        /// Thread-safe overlay refresh with enhanced disposal checks.
+        /// </summary>
+        private void ForceOverlayRefreshSafe()
+        {
+            if (_overlayWindow == null || _disposed || _overlayWindow.IsDisposed || _overlayWindow.Disposing)
+                return;
+
+            try
+            {
+                if (_overlayWindow.InvokeRequired)
+                {
+                    _overlayWindow.BeginInvoke(new Action(() =>
+                    {
+                        try
+                        {
+                            if (!_overlayWindow.IsDisposed && !_overlayWindow.Disposing)
+                            {
+                                _overlayWindow.Invalidate();
+                                _overlayWindow.Update();
+                            }
+                        }
+                        catch (ObjectDisposedException)
+                        {
+                            _logger.LogDebug("Window disposed during refresh");
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning(ex, "Error refreshing overlay on UI thread");
+                        }
+                    }));
+                }
+                else
+                {
+                    if (!_overlayWindow.IsDisposed && !_overlayWindow.Disposing)
+                    {
+                        _overlayWindow.Invalidate();
+                        _overlayWindow.Update();
+                    }
+                }
+                
+                _logger.LogDebug("Safely forced overlay refresh");
+            }
+            catch (ObjectDisposedException)
+            {
+                _logger.LogDebug("Overlay window disposed during safe refresh");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to safely refresh overlay");
             }
         }
 
@@ -705,9 +935,16 @@ namespace TaskbarEqualizer.SystemTray
         private readonly IIconRenderer _iconRenderer;
         private OverlayConfiguration _configuration;
         private SpectrumDataEventArgs? _currentSpectrum;
-        private float[] _smoothedSpectrum = new float[32];
+        private float[] _smoothedSpectrum = new float[16]; // Start with default, will be resized based on settings
         private DateTime _lastAudioTime = DateTime.Now;
         private readonly float _decayRate = 0.92f; // Changed from 0.85f - faster decay
+        
+        // Settings from configuration
+        private float _smoothingFactor = 0.8f; // Default
+        private double _gainFactor = 1.0; // Default
+        
+        // Thread safety for configuration updates
+        private readonly object _configLock = new object();
         
         // Add timer for consistent updates
         private System.Windows.Forms.Timer? _updateTimer;
@@ -827,11 +1064,62 @@ namespace TaskbarEqualizer.SystemTray
 
         public async Task UpdateConfigurationAsync(OverlayConfiguration configuration)
         {
-            _configuration = configuration;
-            Opacity = configuration.Opacity;
-            
-            // Update renderer configuration
-            await _iconRenderer.UpdateConfigurationAsync(configuration.RenderConfiguration);
+            // CRITICAL FIX: Thread-safe configuration update with proper disposal checks
+            if (IsDisposed || Disposing)
+            {
+                return;
+            }
+
+            try
+            {
+                // Thread-safe configuration update
+                lock (_configLock)
+                {
+                    _configuration = configuration;
+                }
+                
+                // UI thread operation for opacity change
+                if (InvokeRequired)
+                {
+                    BeginInvoke(new Action(() =>
+                    {
+                        try
+                        {
+                            if (!IsDisposed && !Disposing)
+                            {
+                                Opacity = configuration.Opacity;
+                            }
+                        }
+                        catch (ObjectDisposedException)
+                        {
+                            // Window disposed, ignore
+                        }
+                    }));
+                }
+                else
+                {
+                    if (!IsDisposed && !Disposing)
+                    {
+                        Opacity = configuration.Opacity;
+                    }
+                }
+                
+                // Update renderer configuration safely
+                if (_iconRenderer != null)
+                {
+                    await _iconRenderer.UpdateConfigurationAsync(configuration.RenderConfiguration);
+                }
+            }
+            catch (ObjectDisposedException)
+            {
+                // Window disposed, ignore
+                return;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Error updating overlay window configuration");
+                throw;
+            }
         }
 
         public void UpdateVisualization(SpectrumDataEventArgs spectrumData)
@@ -848,17 +1136,9 @@ namespace TaskbarEqualizer.SystemTray
                     var newValue = (float)spectrumData.Spectrum[i];
                     var currentValue = _smoothedSpectrum[i];
                     
-                    // Proper smoothing logic
-                    if (newValue > currentValue)
-                    {
-                        // Rising: fast attack
-                        _smoothedSpectrum[i] = currentValue + (newValue - currentValue) * 0.7f;
-                    }
-                    else
-                    {
-                        // Falling: smooth decay
-                        _smoothedSpectrum[i] = currentValue * 0.3f + newValue * 0.7f;
-                    }
+                    // Use configurable smoothing factor like the main spectrum analyzer
+                    _smoothedSpectrum[i] = _smoothedSpectrum[i] * _smoothingFactor + 
+                                         newValue * (1f - _smoothingFactor);
                     
                     // Force to zero when very small
                     if (_smoothedSpectrum[i] < 0.001f)
@@ -924,6 +1204,25 @@ namespace TaskbarEqualizer.SystemTray
 
         private void RenderEqualizerBars(Graphics graphics, Size size)
         {
+            // Safety check for null spectrum
+            if (_smoothedSpectrum == null || _smoothedSpectrum.Length == 0)
+            {
+                _logger.LogWarning("TASKBAR OVERLAY: Cannot render - spectrum array is null or empty");
+                return;
+            }
+
+            // Thread-safe access to configuration
+            OverlayConfiguration? currentConfig;
+            float smoothingFactor;
+            double gainFactor;
+            
+            lock (_configLock)
+            {
+                currentConfig = _configuration;
+                smoothingFactor = _smoothingFactor;
+                gainFactor = _gainFactor;
+            }
+
             var barCount = _smoothedSpectrum.Length;
             var availableWidth = size.Width - 4; // Leave 2px margin on each side
             var barWidth = (float)availableWidth / barCount;
@@ -932,7 +1231,7 @@ namespace TaskbarEqualizer.SystemTray
             DrawResizeIndicators(graphics, size, 8); // Show subtle resize grip
 
             // CRITICAL FIX: Use configuration colors instead of hardcoded values
-            var colorScheme = _configuration.RenderConfiguration?.ColorScheme;
+            var colorScheme = currentConfig?.RenderConfiguration?.ColorScheme;
             Color primaryColor, secondaryColor;
             
             // Check if colors have been set to non-default values (indicating custom colors are being used)
@@ -960,31 +1259,48 @@ namespace TaskbarEqualizer.SystemTray
             }
 
             // Get visualization style from configuration
-            var visualizationStyle = _configuration.RenderConfiguration?.Style ?? EqualizerStyle.Bars;
+            var visualizationStyle = currentConfig?.RenderConfiguration?.Style ?? EqualizerStyle.Bars;
             
             _logger.LogDebug("TASKBAR OVERLAY: Rendering with style: {Style}", visualizationStyle);
 
             // Render based on style
-            switch (visualizationStyle)
+            try
             {
-                case EqualizerStyle.Bars:
-                    RenderBarsStyle(graphics, size, barCount, barWidth, maxHeight, primaryColor, secondaryColor, colorScheme);
-                    break;
-                case EqualizerStyle.Dots:
-                    RenderDotsStyle(graphics, size, barCount, barWidth, maxHeight, primaryColor, secondaryColor, colorScheme);
-                    break;
-                case EqualizerStyle.Waveform:
-                    RenderWaveformStyle(graphics, size, maxHeight, primaryColor, secondaryColor, colorScheme);
-                    break;
-                case EqualizerStyle.Spectrum:
-                    RenderSpectrumStyle(graphics, size, barCount, barWidth, maxHeight, primaryColor, secondaryColor, colorScheme);
-                    break;
-                case EqualizerStyle.Lines:
-                    RenderLinesStyle(graphics, size, barCount, barWidth, maxHeight, primaryColor, secondaryColor, colorScheme);
-                    break;
-                default:
-                    RenderBarsStyle(graphics, size, barCount, barWidth, maxHeight, primaryColor, secondaryColor, colorScheme);
-                    break;
+                switch (visualizationStyle)
+                {
+                    case EqualizerStyle.Bars:
+                        RenderBarsStyle(graphics, size, barCount, barWidth, maxHeight, primaryColor, secondaryColor, colorScheme);
+                        break;
+                    case EqualizerStyle.Dots:
+                        RenderDotsStyle(graphics, size, barCount, barWidth, maxHeight, primaryColor, secondaryColor, colorScheme);
+                        break;
+                    case EqualizerStyle.Waveform:
+                        RenderWaveformStyle(graphics, size, maxHeight, primaryColor, secondaryColor, colorScheme);
+                        break;
+                    case EqualizerStyle.Spectrum:
+                        RenderSpectrumStyle(graphics, size, barCount, barWidth, maxHeight, primaryColor, secondaryColor, colorScheme);
+                        break;
+                    case EqualizerStyle.Lines:
+                        RenderLinesStyle(graphics, size, barCount, barWidth, maxHeight, primaryColor, secondaryColor, colorScheme);
+                        break;
+                    default:
+                        RenderBarsStyle(graphics, size, barCount, barWidth, maxHeight, primaryColor, secondaryColor, colorScheme);
+                        break;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error rendering visualization style {Style}: {Message}", visualizationStyle, ex.Message);
+                // Fall back to a simple safe rendering
+                try
+                {
+                    using var fallbackBrush = new SolidBrush(primaryColor);
+                    graphics.FillRectangle(fallbackBrush, 0, size.Height - 10, size.Width, 10);
+                }
+                catch
+                {
+                    // Even fallback failed, just ignore to prevent crash
+                }
             }
             
             // Small visible drag handle for better UX
@@ -1049,7 +1365,7 @@ namespace TaskbarEqualizer.SystemTray
                 // Draw bars with proper scaling
                 for (int i = 0; i < barCount; i++)
                 {
-                    var level = Math.Max(0, Math.Min(1, _smoothedSpectrum[i]));
+                    var level = Math.Max(0, Math.Min(1, _smoothedSpectrum[i] * (float)_gainFactor));
                     var barHeight = Math.Max(0, (int)(level * maxHeight));
                     var x = 2 + i * barWidth; // Start at 2px margin
                     var y = size.Height - barHeight - 2;
@@ -1103,12 +1419,12 @@ namespace TaskbarEqualizer.SystemTray
 
             var points = new List<PointF>();
             var barCount = _smoothedSpectrum.Length;
-            var stepX = (float)(size.Width - 4) / (barCount - 1);
+            var stepX = barCount > 1 ? (float)(size.Width - 4) / (barCount - 1) : 0;
 
             // Create waveform points
             for (int i = 0; i < barCount; i++)
             {
-                var level = Math.Max(0, Math.Min(1, _smoothedSpectrum[i]));
+                var level = Math.Max(0, Math.Min(1, _smoothedSpectrum[i] * (float)_gainFactor));
                 var x = 2 + i * stepX;
                 var y = size.Height - 2 - (level * maxHeight); // From bottom
                 points.Add(new PointF(x, y));
@@ -1174,7 +1490,7 @@ namespace TaskbarEqualizer.SystemTray
                 // Draw spectrum bars with no gaps for continuous look
                 for (int i = 0; i < barCount; i++)
                 {
-                    var level = Math.Max(0, Math.Min(1, _smoothedSpectrum[i]));
+                    var level = Math.Max(0, Math.Min(1, _smoothedSpectrum[i] * (float)_gainFactor));
                     var barHeight = Math.Max(0, (int)(level * maxHeight));
                     
                     if (barHeight > 0)
@@ -1522,16 +1838,27 @@ namespace TaskbarEqualizer.SystemTray
         {
             try
             {
-                _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
+                lock (_configLock)
+                {
+                    _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
+                    
+                    // Update smoothing factor from animation configuration
+                    if (_configuration.RenderConfiguration?.Animation?.SmoothingFactor != null)
+                    {
+                        _smoothingFactor = (float)_configuration.RenderConfiguration.Animation.SmoothingFactor;
+                        _logger.LogDebug("TASKBAR OVERLAY: Updated smoothing factor to {SmoothingFactor}", _smoothingFactor);
+                    }
+                }
+
                 _logger.LogInformation("TASKBAR OVERLAY: Configuration updated - UseGradient: {UseGradient}, Primary: {Primary}, Secondary: {Secondary}", 
-                    _configuration.RenderConfiguration?.ColorScheme?.UseGradient,
-                    _configuration.RenderConfiguration?.ColorScheme?.PrimaryColor,
-                    _configuration.RenderConfiguration?.ColorScheme?.SecondaryColor);
+                    configuration.RenderConfiguration?.ColorScheme?.UseGradient,
+                    configuration.RenderConfiguration?.ColorScheme?.PrimaryColor,
+                    configuration.RenderConfiguration?.ColorScheme?.SecondaryColor);
                 
                 // Force immediate repaint to show new settings
                 if (InvokeRequired)
                 {
-                    Invoke(new Action(() => {
+                    BeginInvoke(new Action(() => {
                         Invalidate();
                         Update();
                     }));
@@ -1547,6 +1874,47 @@ namespace TaskbarEqualizer.SystemTray
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Failed to update overlay window configuration");
+            }
+        }
+
+        /// <summary>
+        /// Updates audio-specific settings for the overlay window.
+        /// </summary>
+        public void UpdateAudioSettings(int? frequencyBands, double? gainFactor)
+        {
+            try
+            {
+                lock (_configLock)
+                {
+                    // Update frequency bands if provided
+                    if (frequencyBands.HasValue && frequencyBands.Value != _smoothedSpectrum.Length)
+                    {
+                        _logger.LogInformation("TASKBAR OVERLAY: Resizing spectrum array from {OldSize} to {NewSize}", 
+                            _smoothedSpectrum.Length, frequencyBands.Value);
+                        
+                        var newSpectrum = new float[frequencyBands.Value];
+                        
+                        // Copy existing data if possible
+                        var copyLength = Math.Min(_smoothedSpectrum.Length, newSpectrum.Length);
+                        Array.Copy(_smoothedSpectrum, newSpectrum, copyLength);
+                        
+                        _smoothedSpectrum = newSpectrum;
+                    }
+
+                    // Update gain factor if provided
+                    if (gainFactor.HasValue)
+                    {
+                        _gainFactor = gainFactor.Value;
+                        _logger.LogDebug("TASKBAR OVERLAY: Updated gain factor to {GainFactor}", _gainFactor);
+                    }
+
+                    _logger.LogInformation("TASKBAR OVERLAY: Audio settings updated - Bands: {Bands}, Gain: {Gain}", 
+                        _smoothedSpectrum.Length, _gainFactor);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to update overlay window audio settings");
             }
         }
         

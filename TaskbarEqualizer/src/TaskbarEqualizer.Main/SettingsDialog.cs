@@ -1074,13 +1074,20 @@ namespace TaskbarEqualizer.Main
                 liveSettings.SmoothingFactor = _settings.SmoothingFactor;
                 liveSettings.GainFactor = _settings.GainFactor;
 
-                // Force synchronous save to complete event propagation
-                Task.Run(async () => await _settingsManager.SaveAsync()).Wait();
+                // CRITICAL FIX: Use synchronous approach with proper deadlock prevention
+                // Mark settings as dirty to trigger event propagation immediately
+                _settingsManager.MarkAsDirty();
+                
+                // Apply Windows startup setting synchronously if changed
+                if (_settings.StartWithWindows != _originalSettings.StartWithWindows)
+                {
+                    ApplyStartWithWindowsSync(_settings.StartWithWindows);
+                }
                 
                 _originalSettings = _settings.Clone();
                 _applyButton.Enabled = false;
                 
-                _logger.LogInformation("Settings applied successfully (sync)");
+                _logger.LogInformation("Settings applied successfully (sync) - events fired, file save deferred");
             }
             catch (Exception ex)
             {

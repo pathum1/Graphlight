@@ -1386,7 +1386,7 @@ namespace TaskbarEqualizer.SystemTray
             
             for (int i = 0; i < barCount; i++)
             {
-                var level = Math.Max(0, Math.Min(1, _smoothedSpectrum[i]));
+                var level = Math.Max(0, Math.Min(1, _smoothedSpectrum[i] * (float)_gainFactor));
                 var numDots = (int)(level * (maxHeight / (dotSize + 2))); // Number of dots based on level
                 
                 var x = 2 + i * barWidth + (barWidth - dotSize) / 2; // Center dot in bar space
@@ -1512,7 +1512,7 @@ namespace TaskbarEqualizer.SystemTray
             
             for (int i = 0; i < barCount; i++)
             {
-                var level = Math.Max(0, Math.Min(1, _smoothedSpectrum[i]));
+                var level = Math.Max(0, Math.Min(1, _smoothedSpectrum[i] * (float)_gainFactor));
                 var lineHeight = (int)(level * maxHeight);
                 
                 if (lineHeight > 0)

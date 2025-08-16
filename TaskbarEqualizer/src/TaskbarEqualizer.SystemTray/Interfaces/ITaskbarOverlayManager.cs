@@ -77,14 +77,18 @@ namespace TaskbarEqualizer.SystemTray.Interfaces
         Task UpdateSettingsAsync(object settings, CancellationToken cancellationToken = default);
 
         /// <summary>
-        /// Sets the callback functions for integrating with ApplicationSettings for position persistence.
+        /// Sets the callback functions for integrating with ApplicationSettings for position and size persistence.
         /// </summary>
         /// <param name="savePositionCallback">Callback to save position to ApplicationSettings</param>
         /// <param name="getSavedPositionCallback">Callback to get saved position from ApplicationSettings</param>
+        /// <param name="saveSizeCallback">Callback to save size to ApplicationSettings</param>
+        /// <param name="getSavedSizeCallback">Callback to get saved size from ApplicationSettings</param>
         /// <param name="isRememberPositionEnabledCallback">Callback to check if position remembering is enabled</param>
         void SetApplicationSettingsCallbacks(
             Action<Point>? savePositionCallback, 
-            Func<Point?>? getSavedPositionCallback, 
+            Func<Point?>? getSavedPositionCallback,
+            Action<Size>? saveSizeCallback,
+            Func<Size?>? getSavedSizeCallback,
             Func<bool>? isRememberPositionEnabledCallback);
     }
 

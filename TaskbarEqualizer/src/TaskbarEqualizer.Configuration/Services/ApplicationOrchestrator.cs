@@ -263,16 +263,26 @@ namespace TaskbarEqualizer.Configuration.Services
                 RememberPosition = settings.RememberPosition
             };
 
-            // Restore saved overlay position if RememberPosition is enabled
-            if (settings.RememberPosition && settings.WindowLocation != Point.Empty)
+            // Restore saved overlay position and size if RememberPosition is enabled
+            if (settings.RememberPosition)
             {
-                overlayConfig.Position = OverlayPosition.Custom;
-                overlayConfig.CustomX = settings.WindowLocation.X;
-                overlayConfig.CustomY = settings.WindowLocation.Y;
-                _logger.LogInformation("Restored taskbar overlay position: ({X}, {Y})", settings.WindowLocation.X, settings.WindowLocation.Y);
+                if (settings.WindowLocation != Point.Empty)
+                {
+                    overlayConfig.Position = OverlayPosition.Custom;
+                    overlayConfig.CustomX = settings.WindowLocation.X;
+                    overlayConfig.CustomY = settings.WindowLocation.Y;
+                    _logger.LogInformation("Restored taskbar overlay position: ({X}, {Y})", settings.WindowLocation.X, settings.WindowLocation.Y);
+                }
+                
+                if (settings.WindowSize != Size.Empty)
+                {
+                    overlayConfig.Width = settings.WindowSize.Width;
+                    overlayConfig.Height = settings.WindowSize.Height;
+                    _logger.LogInformation("Restored taskbar overlay size: ({Width}, {Height})", settings.WindowSize.Width, settings.WindowSize.Height);
+                }
             }
             
-            // Set up ApplicationSettings callbacks for position persistence
+            // Set up ApplicationSettings callbacks for position and size persistence
             _taskbarOverlayManager.SetApplicationSettingsCallbacks(
                 savePositionCallback: (position) =>
                 {
@@ -315,6 +325,50 @@ namespace TaskbarEqualizer.Configuration.Services
                     catch (Exception ex)
                     {
                         _logger.LogError(ex, "Failed to get saved overlay position from ApplicationSettings");
+                        return null;
+                    }
+                },
+                saveSizeCallback: (size) =>
+                {
+                    try
+                    {
+                        var currentSettings = _settingsManager.Settings;
+                        currentSettings.WindowSize = size;
+                        currentSettings.RememberPosition = true;
+                        
+                        // Save asynchronously
+                        Task.Run(async () =>
+                        {
+                            try
+                            {
+                                await _settingsManager.SaveAsync();
+                                _logger.LogInformation("Saved overlay size ({Width}, {Height}) to ApplicationSettings", size.Width, size.Height);
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.LogError(ex, "Failed to save overlay size to ApplicationSettings");
+                            }
+                        });
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Failed to update ApplicationSettings with overlay size");
+                    }
+                },
+                getSavedSizeCallback: () =>
+                {
+                    try
+                    {
+                        var currentSettings = _settingsManager.Settings;
+                        if (currentSettings.RememberPosition && currentSettings.WindowSize != Size.Empty)
+                        {
+                            return currentSettings.WindowSize;
+                        }
+                        return null;
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Failed to get saved overlay size from ApplicationSettings");
                         return null;
                     }
                 },

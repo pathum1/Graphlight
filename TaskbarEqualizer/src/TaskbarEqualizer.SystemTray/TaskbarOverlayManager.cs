@@ -36,6 +36,12 @@ namespace TaskbarEqualizer.SystemTray
         // Callback for getting saved position from ApplicationSettings
         private Func<Point?>? _getSavedPosition;
         
+        // Callback for saving size to ApplicationSettings
+        private Action<Size>? _onSizeSavedToSettings;
+        
+        // Callback for getting saved size from ApplicationSettings
+        private Func<Size?>? _getSavedSize;
+        
         // Callback for checking if position remembering is enabled
         private Func<bool>? _isRememberPositionEnabled;
 
@@ -56,17 +62,23 @@ namespace TaskbarEqualizer.SystemTray
         /// </summary>
         /// <param name="savePositionCallback">Callback to save position to ApplicationSettings</param>
         /// <param name="getSavedPositionCallback">Callback to get saved position from ApplicationSettings</param>
+        /// <param name="saveSizeCallback">Callback to save size to ApplicationSettings</param>
+        /// <param name="getSavedSizeCallback">Callback to get saved size from ApplicationSettings</param>
         /// <param name="isRememberPositionEnabledCallback">Callback to check if position remembering is enabled</param>
         public void SetApplicationSettingsCallbacks(
             Action<Point>? savePositionCallback, 
-            Func<Point?>? getSavedPositionCallback, 
+            Func<Point?>? getSavedPositionCallback,
+            Action<Size>? saveSizeCallback,
+            Func<Size?>? getSavedSizeCallback,
             Func<bool>? isRememberPositionEnabledCallback)
         {
             _onPositionSavedToSettings = savePositionCallback;
             _getSavedPosition = getSavedPositionCallback;
+            _onSizeSavedToSettings = saveSizeCallback;
+            _getSavedSize = getSavedSizeCallback;
             _isRememberPositionEnabled = isRememberPositionEnabledCallback;
             
-            _logger.LogDebug("ApplicationSettings callbacks configured for overlay position persistence");
+            _logger.LogDebug("ApplicationSettings callbacks configured for overlay position and size persistence");
         }
 
         public Task InitializeAsync(OverlayConfiguration configuration, CancellationToken cancellationToken = default)
@@ -80,8 +92,8 @@ namespace TaskbarEqualizer.SystemTray
             {
                 _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
 
-                // Restore saved position if RememberPosition is enabled
-                RestoreOverlayPosition();
+                // Restore saved position and size if RememberPosition is enabled
+                RestoreOverlayPositionAndSize();
 
                 lock (_lock)
                 {
@@ -559,7 +571,7 @@ namespace TaskbarEqualizer.SystemTray
             var taskbarBounds = GetTaskbarBounds();
             var overlayBounds = CalculateOverlayBounds(taskbarBounds);
 
-            _overlayWindow = new OverlayWindow(_logger, _iconRenderer, _configuration, OnOverlayPositionChanged)
+            _overlayWindow = new OverlayWindow(_logger, _iconRenderer, _configuration, OnOverlayPositionChanged, OnOverlaySizeChanged)
             {
                 Bounds = overlayBounds
             };
@@ -760,49 +772,69 @@ namespace TaskbarEqualizer.SystemTray
             }
         }
 
-        private void RestoreOverlayPosition()
+        private void RestoreOverlayPositionAndSize()
         {
             try
             {
                 // Check if RememberPosition is enabled
                 if (!ShouldRememberPosition())
                 {
-                    _logger.LogDebug("Position remembering is disabled, using default position");
+                    _logger.LogDebug("Position remembering is disabled, using default position and size");
                     return;
                 }
 
-                // Try to get saved position from ApplicationSettings
+                // Try to get saved position and size from ApplicationSettings
                 var savedPosition = GetSavedPositionFromApplicationSettings();
+                var savedSize = GetSavedSizeFromApplicationSettings();
+                
                 if (savedPosition.HasValue)
                 {
                     var position = savedPosition.Value;
                     
+                    // Use saved size if available, otherwise use default configuration size
+                    var width = savedSize?.Width ?? _configuration.Width;
+                    var height = savedSize?.Height ?? _configuration.Height;
+                    
                     // Validate that the saved position is still on screen
-                    if (IsPositionOnScreen(position.X, position.Y, _configuration.Width, _configuration.Height))
+                    if (IsPositionOnScreen(position.X, position.Y, width, height))
                     {
                         lock (_lock)
                         {
                             _configuration.Position = OverlayPosition.Custom;
                             _configuration.CustomX = position.X;
                             _configuration.CustomY = position.Y;
+                            _configuration.Width = width;
+                            _configuration.Height = height;
                             _configuration.RememberPosition = true;
                         }
 
-                        _logger.LogInformation("Restored overlay position: ({X}, {Y})", position.X, position.Y);
+                        _logger.LogInformation("Restored overlay position: ({X}, {Y}) and size: ({Width}, {Height})", 
+                            position.X, position.Y, width, height);
                     }
                     else
                     {
                         _logger.LogWarning("Saved overlay position ({X}, {Y}) is off-screen, using default position", position.X, position.Y);
                     }
                 }
+                else if (savedSize.HasValue)
+                {
+                    // Only size was saved, restore just the size
+                    lock (_lock)
+                    {
+                        _configuration.Width = savedSize.Value.Width;
+                        _configuration.Height = savedSize.Value.Height;
+                    }
+                    
+                    _logger.LogInformation("Restored overlay size: ({Width}, {Height})", savedSize.Value.Width, savedSize.Value.Height);
+                }
                 else
                 {
-                    _logger.LogDebug("No saved overlay position found, using default position");
+                    _logger.LogDebug("No saved overlay position or size found, using default values");
                 }
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to restore overlay position, using default");
+                _logger.LogError(ex, "Failed to restore overlay position and size, using defaults");
             }
         }
 
@@ -837,6 +869,57 @@ namespace TaskbarEqualizer.SystemTray
             }
         }
 
+        private Size? GetSavedSizeFromApplicationSettings()
+        {
+            try
+            {
+                if (_getSavedSize != null)
+                {
+                    var savedSize = _getSavedSize();
+                    if (savedSize.HasValue)
+                    {
+                        _logger.LogDebug("Retrieved saved size from ApplicationSettings: ({Width}, {Height})", 
+                            savedSize.Value.Width, savedSize.Value.Height);
+                    }
+                    else
+                    {
+                        _logger.LogDebug("No saved size found in ApplicationSettings");
+                    }
+                    return savedSize;
+                }
+                else
+                {
+                    _logger.LogDebug("Cannot get saved size from ApplicationSettings - callback not configured");
+                    return null;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to get saved size from ApplicationSettings");
+                return null;
+            }
+        }
+
+        private void SaveSizeToApplicationSettings(Size size)
+        {
+            try
+            {
+                if (_onSizeSavedToSettings != null)
+                {
+                    _onSizeSavedToSettings(size);
+                    _logger.LogInformation("Size ({Width}, {Height}) saved to ApplicationSettings", size.Width, size.Height);
+                }
+                else
+                {
+                    _logger.LogWarning("Cannot save size to ApplicationSettings - callback not configured");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to save size ({Width}, {Height}) to ApplicationSettings", size.Width, size.Height);
+            }
+        }
+
         private void OnOverlayPositionChanged(Point position)
         {
             try
@@ -865,6 +948,36 @@ namespace TaskbarEqualizer.SystemTray
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Failed to save overlay position");
+            }
+        }
+
+        private void OnOverlaySizeChanged(Size size)
+        {
+            try
+            {
+                // Check if RememberPosition is enabled in the application settings
+                if (!ShouldRememberPosition())
+                {
+                    _logger.LogDebug("Position remembering is disabled, skipping size save");
+                    return;
+                }
+
+                lock (_lock)
+                {
+                    // Update the configuration with new size
+                    _configuration.Width = size.Width;
+                    _configuration.Height = size.Height;
+                    _configuration.RememberPosition = true;
+                }
+
+                _logger.LogInformation("Saved overlay size: ({Width}, {Height})", size.Width, size.Height);
+
+                // Save to application settings for persistence across restarts
+                SaveSizeToApplicationSettings(size);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to save overlay size");
             }
         }
 
@@ -1197,13 +1310,15 @@ namespace TaskbarEqualizer.SystemTray
         }
 
         private readonly Action<Point>? _onPositionChanged;
+        private readonly Action<Size>? _onSizeChanged;
 
-        public OverlayWindow(ILogger logger, IIconRenderer iconRenderer, OverlayConfiguration configuration, Action<Point>? onPositionChanged = null)
+        public OverlayWindow(ILogger logger, IIconRenderer iconRenderer, OverlayConfiguration configuration, Action<Point>? onPositionChanged = null, Action<Size>? onSizeChanged = null)
         {
             _logger = logger;
             _iconRenderer = iconRenderer;
             _configuration = configuration;
             _onPositionChanged = onPositionChanged;
+            _onSizeChanged = onSizeChanged;
 
             SetupWindow();
         }
@@ -1998,6 +2113,7 @@ namespace TaskbarEqualizer.SystemTray
             if (e.Button == MouseButtons.Left)
             {
                 bool wasDragging = _isDragging;
+                bool wasResizing = _isResizing;
                 
                 _isDragging = false;
                 _isResizing = false;
@@ -2011,6 +2127,12 @@ namespace TaskbarEqualizer.SystemTray
                 if (wasDragging)
                 {
                     _onPositionChanged?.Invoke(Location);
+                }
+                
+                // Save size if the user finished resizing and RememberPosition is enabled
+                if (wasResizing)
+                {
+                    _onSizeChanged?.Invoke(Size);
                 }
                 
                 // Force a final update after drag ends to ensure UI is current

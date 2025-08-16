@@ -1,5 +1,6 @@
 using System;
 using System.Drawing;
+using System.IO;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using Microsoft.Extensions.DependencyInjection;
@@ -52,7 +53,7 @@ namespace TaskbarEqualizer.Main
             try
             {
                 // Now we're definitely on the UI thread
-                var trayIcon = SystemIcons.Application;
+                var trayIcon = LoadApplicationIcon();
                 await _systemTrayManager.InitializeAsync(trayIcon, "TaskbarEqualizer - Professional Audio Visualizer");
                 _logger.LogInformation("System tray initialized");
 
@@ -79,7 +80,8 @@ namespace TaskbarEqualizer.Main
 
                 // Create and register spectrum window with orchestrator
                 _spectrumWindow = new SpectrumAnalyzerWindow(
-                    _serviceProvider.GetRequiredService<ILogger<SpectrumAnalyzerWindow>>());
+                    _serviceProvider.GetRequiredService<ILogger<SpectrumAnalyzerWindow>>(),
+                    _serviceProvider.GetRequiredService<ISettingsManager>());
                 _orchestrator.SetSpectrumWindow(_spectrumWindow);
                 _logger.LogInformation("Spectrum window created and registered with orchestrator");
 
@@ -150,7 +152,7 @@ namespace TaskbarEqualizer.Main
                 {
                     case "exit":
                         _logger.LogInformation("Exit requested from context menu");
-                        Application.Exit();
+                        ExitApplication();
                         break;
                     case "about":
                         _logger.LogInformation("About requested from context menu");
@@ -173,6 +175,73 @@ namespace TaskbarEqualizer.Main
             {
                 _logger.LogError(ex, "Error handling menu item click: {ItemId}", e.MenuItem.Id);
             }
+        }
+
+        /// <summary>
+        /// Properly exits the application with cleanup.
+        /// </summary>
+        private void ExitApplication()
+        {
+            try
+            {
+                _logger.LogInformation("Beginning application shutdown...");
+                
+                // Exit the application context message loop
+                ExitThread();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error during application exit");
+                // Force exit if there's an error
+                Environment.Exit(1);
+            }
+        }
+
+        /// <summary>
+        /// Loads the application icon for the system tray.
+        /// </summary>
+        private Icon LoadApplicationIcon()
+        {
+            try
+            {
+                // Try to load the custom icon from resources
+                var iconPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources", "app.ico");
+                
+                if (File.Exists(iconPath))
+                {
+                    var icon = new Icon(iconPath);
+                    _logger.LogDebug("Loaded custom application icon from: {IconPath}", iconPath);
+                    return icon;
+                }
+                else
+                {
+                    _logger.LogWarning("Custom icon not found at: {IconPath}, using embedded resource", iconPath);
+                    
+                    // Try to load from embedded resources
+                    var assembly = System.Reflection.Assembly.GetExecutingAssembly();
+                    var resourceName = "TaskbarEqualizer.Main.Resources.app.ico";
+                    
+                    using var stream = assembly.GetManifestResourceStream(resourceName);
+                    if (stream != null)
+                    {
+                        var icon = new Icon(stream);
+                        _logger.LogDebug("Loaded application icon from embedded resource: {ResourceName}", resourceName);
+                        return icon;
+                    }
+                    else
+                    {
+                        _logger.LogWarning("Embedded icon resource not found: {ResourceName}, falling back to system icon", resourceName);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to load custom application icon, falling back to system icon");
+            }
+            
+            // Fallback to system application icon
+            _logger.LogDebug("Using system application icon as fallback");
+            return SystemIcons.Application;
         }
 
         /// <summary>

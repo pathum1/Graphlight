@@ -2,11 +2,14 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using Microsoft.Extensions.Logging;
 using TaskbarEqualizer.Core.Interfaces;
 using TaskbarEqualizer.Configuration;
+using TaskbarEqualizer.Configuration.Interfaces;
 using TaskbarEqualizer.SystemTray.Interfaces;
 
 namespace TaskbarEqualizer.Main
@@ -17,6 +20,7 @@ namespace TaskbarEqualizer.Main
     public partial class SpectrumAnalyzerWindow : Form
     {
         private readonly ILogger<SpectrumAnalyzerWindow> _logger;
+        private readonly ISettingsManager? _settingsManager;
         private SpectrumDataEventArgs? _currentSpectrum;
         private Timer? _refreshTimer;
         private float[] _smoothedSpectrum = new float[16]; // Default to 16 bands from ApplicationSettings
@@ -24,9 +28,10 @@ namespace TaskbarEqualizer.Main
         private double _gainFactor = 1.0; // Default from ApplicationSettings
         private ApplicationSettings? _settings;
 
-        public SpectrumAnalyzerWindow(ILogger<SpectrumAnalyzerWindow> logger)
+        public SpectrumAnalyzerWindow(ILogger<SpectrumAnalyzerWindow> logger, ISettingsManager? settingsManager = null)
         {
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            _settingsManager = settingsManager;
             InitializeComponent();
             SetupWindow();
             StartRefreshTimer();
@@ -68,11 +73,12 @@ namespace TaskbarEqualizer.Main
             // Set icon if available
             try
             {
-                Icon = SystemIcons.Application;
+                Icon = LoadApplicationIcon();
             }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Could not set window icon");
+                Icon = SystemIcons.Application; // Fallback
             }
 
             // Handle window closing
@@ -94,6 +100,11 @@ namespace TaskbarEqualizer.Main
             {
                 Hide();
                 ShowInTaskbar = false;
+            }
+            else if (WindowState == FormWindowState.Normal && _settings != null)
+            {
+                // Save window size when it changes
+                SaveWindowLocation();
             }
         }
 
@@ -129,7 +140,29 @@ namespace TaskbarEqualizer.Main
                 if (rememberPosition)
                 {
                     _settings.WindowLocation = Location;
-                    _logger.LogDebug("Saved window location: {Location}", Location);
+                    _settings.WindowSize = Size;
+                    _logger.LogDebug("Saved window position: {Location} and size: {Size}", Location, Size);
+                    
+                    // Save settings to disk asynchronously
+                    if (_settingsManager != null)
+                    {
+                        _ = Task.Run(async () =>
+                        {
+                            try
+                            {
+                                await _settingsManager.SaveAsync();
+                                _logger.LogDebug("Window position and size saved to disk");
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.LogError(ex, "Failed to save window position to disk");
+                            }
+                        });
+                    }
+                    else
+                    {
+                        _logger.LogDebug("Settings manager not available, position saved in memory only");
+                    }
                 }
             }
         }
@@ -610,21 +643,32 @@ namespace TaskbarEqualizer.Main
                     }
                 }
 
-                // Restore window position if remember position is enabled and a valid location is saved
+                // Restore window position and size if remember position is enabled and valid values are saved
                 var rememberPosition = GetRememberPositionSetting();
-                if (rememberPosition && settings.WindowLocation != Point.Empty)
+                if (rememberPosition)
                 {
-                    var savedLocation = settings.WindowLocation;
-                    
-                    // Validate that the saved location is within screen bounds
-                    if (IsLocationOnScreen(savedLocation))
+                    // Restore window location
+                    if (settings.WindowLocation != Point.Empty)
                     {
-                        Location = savedLocation;
-                        _logger.LogDebug("Restored window location to: {Location}", savedLocation);
+                        var savedLocation = settings.WindowLocation;
+                        
+                        // Validate that the saved location is within screen bounds
+                        if (IsLocationOnScreen(savedLocation))
+                        {
+                            Location = savedLocation;
+                            _logger.LogDebug("Restored window location to: {Location}", savedLocation);
+                        }
+                        else
+                        {
+                            _logger.LogWarning("Saved window location {Location} is outside screen bounds, using default", savedLocation);
+                        }
                     }
-                    else
+                    
+                    // Restore window size
+                    if (settings.WindowSize != Size.Empty && settings.WindowSize.Width >= MinimumSize.Width && settings.WindowSize.Height >= MinimumSize.Height)
                     {
-                        _logger.LogWarning("Saved window location {Location} is outside screen bounds, using default", savedLocation);
+                        Size = settings.WindowSize;
+                        _logger.LogDebug("Restored window size to: {Size}", settings.WindowSize);
                     }
                 }
 
@@ -648,6 +692,53 @@ namespace TaskbarEqualizer.Main
             {
                 _logger.LogError(ex, "Failed to update spectrum window settings");
             }
+        }
+
+        /// <summary>
+        /// Loads the application icon.
+        /// </summary>
+        private Icon LoadApplicationIcon()
+        {
+            try
+            {
+                // Try to load the custom icon from resources
+                var iconPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources", "app.ico");
+                
+                if (File.Exists(iconPath))
+                {
+                    var icon = new Icon(iconPath);
+                    _logger.LogDebug("Loaded custom application icon from: {IconPath}", iconPath);
+                    return icon;
+                }
+                else
+                {
+                    _logger.LogWarning("Custom icon not found at: {IconPath}, using embedded resource", iconPath);
+                    
+                    // Try to load from embedded resources
+                    var assembly = System.Reflection.Assembly.GetExecutingAssembly();
+                    var resourceName = "TaskbarEqualizer.Main.Resources.app.ico";
+                    
+                    using var stream = assembly.GetManifestResourceStream(resourceName);
+                    if (stream != null)
+                    {
+                        var icon = new Icon(stream);
+                        _logger.LogDebug("Loaded application icon from embedded resource: {ResourceName}", resourceName);
+                        return icon;
+                    }
+                    else
+                    {
+                        _logger.LogWarning("Embedded icon resource not found: {ResourceName}, falling back to system icon", resourceName);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to load custom application icon, falling back to system icon");
+            }
+            
+            // Fallback to system application icon
+            _logger.LogDebug("Using system application icon as fallback");
+            return SystemIcons.Application;
         }
 
         protected override void Dispose(bool disposing)

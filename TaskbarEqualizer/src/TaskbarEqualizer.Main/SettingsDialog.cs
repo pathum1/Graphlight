@@ -1062,6 +1062,10 @@ namespace TaskbarEqualizer.Main
                 var liveSettings = _settingsManager.Settings;
                 
                 // Apply each setting individually to ensure PropertyChanged events fire
+                liveSettings.StartWithWindows = _settings.StartWithWindows;
+                liveSettings.StartMinimized = _settings.StartMinimized;
+                liveSettings.ShowNotifications = _settings.ShowNotifications;
+                liveSettings.RememberPosition = _settings.RememberPosition;
                 liveSettings.UseCustomColors = _settings.UseCustomColors;
                 liveSettings.CustomPrimaryColor = _settings.CustomPrimaryColor;
                 liveSettings.CustomSecondaryColor = _settings.CustomSecondaryColor;
@@ -1069,10 +1073,15 @@ namespace TaskbarEqualizer.Main
                 liveSettings.GradientDirection = _settings.GradientDirection;
                 liveSettings.VisualizationStyle = _settings.VisualizationStyle;
                 liveSettings.RenderQuality = _settings.RenderQuality;
+                liveSettings.EnableAnimations = _settings.EnableAnimations;
+                liveSettings.EnableEffects = _settings.EnableEffects;
                 liveSettings.Opacity = _settings.Opacity;
+                liveSettings.SelectedAudioDevice = _settings.SelectedAudioDevice;
+                liveSettings.EnableAutoDeviceSwitch = _settings.EnableAutoDeviceSwitch;
                 liveSettings.FrequencyBands = _settings.FrequencyBands;
                 liveSettings.SmoothingFactor = _settings.SmoothingFactor;
                 liveSettings.GainFactor = _settings.GainFactor;
+                liveSettings.VolumeThreshold = _settings.VolumeThreshold;
 
                 // CRITICAL FIX: Use synchronous approach with proper deadlock prevention
                 // Mark settings as dirty to trigger event propagation immediately
@@ -1178,6 +1187,7 @@ namespace TaskbarEqualizer.Main
             return _settings.StartWithWindows != _originalSettings.StartWithWindows ||
                    _settings.StartMinimized != _originalSettings.StartMinimized ||
                    _settings.ShowNotifications != _originalSettings.ShowNotifications ||
+                   _settings.RememberPosition != _originalSettings.RememberPosition ||
                    _settings.VisualizationStyle != _originalSettings.VisualizationStyle ||
                    _settings.RenderQuality != _originalSettings.RenderQuality ||
                    _settings.EnableAnimations != _originalSettings.EnableAnimations ||
@@ -1216,6 +1226,31 @@ namespace TaskbarEqualizer.Main
                 // CRITICAL FIX: Force immediate property change events by setting each property individually
                 // This ensures PropertyChanged events fire for each setting, enabling proper event propagation
                 var liveSettings = _settingsManager.Settings;
+                
+                // General settings
+                if (liveSettings.StartWithWindows != _settings.StartWithWindows)
+                {
+                    liveSettings.StartWithWindows = _settings.StartWithWindows;
+                    _logger.LogDebug("Applied StartWithWindows: {Value}", _settings.StartWithWindows);
+                }
+                
+                if (liveSettings.StartMinimized != _settings.StartMinimized)
+                {
+                    liveSettings.StartMinimized = _settings.StartMinimized;
+                    _logger.LogDebug("Applied StartMinimized: {Value}", _settings.StartMinimized);
+                }
+                
+                if (liveSettings.ShowNotifications != _settings.ShowNotifications)
+                {
+                    liveSettings.ShowNotifications = _settings.ShowNotifications;
+                    _logger.LogDebug("Applied ShowNotifications: {Value}", _settings.ShowNotifications);
+                }
+                
+                if (liveSettings.RememberPosition != _settings.RememberPosition)
+                {
+                    liveSettings.RememberPosition = _settings.RememberPosition;
+                    _logger.LogDebug("Applied RememberPosition: {Value}", _settings.RememberPosition);
+                }
                 
                 // Color settings - these directly affect your taskbar spectrum appearance
                 if (liveSettings.UseCustomColors != _settings.UseCustomColors)
@@ -1284,6 +1319,38 @@ namespace TaskbarEqualizer.Main
                 {
                     liveSettings.GainFactor = _settings.GainFactor;
                     _logger.LogDebug("Applied GainFactor: {Factor}", _settings.GainFactor);
+                }
+                
+                // Audio settings
+                if (liveSettings.SelectedAudioDevice != _settings.SelectedAudioDevice)
+                {
+                    liveSettings.SelectedAudioDevice = _settings.SelectedAudioDevice;
+                    _logger.LogDebug("Applied SelectedAudioDevice: {Device}", _settings.SelectedAudioDevice);
+                }
+                
+                if (liveSettings.EnableAutoDeviceSwitch != _settings.EnableAutoDeviceSwitch)
+                {
+                    liveSettings.EnableAutoDeviceSwitch = _settings.EnableAutoDeviceSwitch;
+                    _logger.LogDebug("Applied EnableAutoDeviceSwitch: {Value}", _settings.EnableAutoDeviceSwitch);
+                }
+                
+                if (Math.Abs(liveSettings.VolumeThreshold - _settings.VolumeThreshold) > 0.01)
+                {
+                    liveSettings.VolumeThreshold = _settings.VolumeThreshold;
+                    _logger.LogDebug("Applied VolumeThreshold: {Threshold}", _settings.VolumeThreshold);
+                }
+                
+                // Visual settings
+                if (liveSettings.EnableAnimations != _settings.EnableAnimations)
+                {
+                    liveSettings.EnableAnimations = _settings.EnableAnimations;
+                    _logger.LogDebug("Applied EnableAnimations: {Value}", _settings.EnableAnimations);
+                }
+                
+                if (liveSettings.EnableEffects != _settings.EnableEffects)
+                {
+                    liveSettings.EnableEffects = _settings.EnableEffects;
+                    _logger.LogDebug("Applied EnableEffects: {Value}", _settings.EnableEffects);
                 }
 
                 // Apply Windows startup setting if changed

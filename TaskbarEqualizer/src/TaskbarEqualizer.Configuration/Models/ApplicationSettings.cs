@@ -405,6 +405,57 @@ namespace TaskbarEqualizer.Configuration
             }
         }
 
+        // Private fields for window size
+        private Size _windowSize = Size.Empty;
+
+        /// <summary>
+        /// Saved window size for the main spectrum analyzer window.
+        /// </summary>
+        [JsonIgnore]
+        public Size WindowSize
+        {
+            get => _windowSize;
+            set => SetProperty(ref _windowSize, value);
+        }
+
+        /// <summary>
+        /// Window size as string for JSON serialization (Width,Height format).
+        /// </summary>
+        [JsonPropertyName("WindowSize")]
+        public string WindowSizeString
+        {
+            get => _windowSize == Size.Empty ? string.Empty : $"{_windowSize.Width},{_windowSize.Height}";
+            set
+            {
+                try
+                {
+                    if (string.IsNullOrEmpty(value))
+                    {
+                        _windowSize = Size.Empty;
+                    }
+                    else
+                    {
+                        var parts = value.Split(',');
+                        if (parts.Length == 2 && 
+                            int.TryParse(parts[0], out int width) && 
+                            int.TryParse(parts[1], out int height))
+                        {
+                            _windowSize = new Size(width, height);
+                        }
+                        else
+                        {
+                            _windowSize = Size.Empty;
+                        }
+                    }
+                    OnPropertyChanged(nameof(WindowSize));
+                }
+                catch
+                {
+                    _windowSize = Size.Empty;
+                }
+            }
+        }
+
         /// <summary>
         /// Whether to remember and restore the spectrum analyzer window position.
         /// </summary>
@@ -666,6 +717,7 @@ namespace TaskbarEqualizer.Configuration
                 target.LogLevel = LogLevel;
                 target.EnableTelemetry = EnableTelemetry;
                 target.WindowLocation = WindowLocation;
+                target.WindowSize = WindowSize;
                 target.RememberPosition = RememberPosition;
                 // Set critical visual/color properties last to ensure they appear in ChangedKeys
                 // and override any CustomSettings changes that might mask them

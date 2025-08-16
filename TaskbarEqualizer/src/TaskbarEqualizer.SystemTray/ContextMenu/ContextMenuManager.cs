@@ -764,7 +764,7 @@ namespace TaskbarEqualizer.SystemTray.ContextMenu
         private void OnExitClicked(IContextMenuItem menuItem)
         {
             _logger.LogInformation("Exit menu item clicked");
-            Application.Exit();
+            // Exit is handled by ApplicationContext through MenuItemClicked event
         }
 
         #endregion
